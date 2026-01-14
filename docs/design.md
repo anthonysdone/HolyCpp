@@ -1,1114 +1,1256 @@
-# HolyC- Language Design Document
-
-## Table of Contents
-
-### Core Language Specification
-1. [Overview](#1-overview)
-2. [Type System](#2-type-system)
-3. [Functions](#3-functions)
-4. [Control Flow](#4-control-flow)
-5. [String and Character Literals](#5-string-and-character-literals)
-6. [Operators](#6-operators)
-7. [Type Casting](#7-type-casting)
-8. [Classes (Structs)](#8-classes-structs)
-9. [Unions](#9-unions)
-10. [Memory Management](#10-memory-management)
-
-### Advanced Features
-11. [Foreign Function Interface (FFI)](#11-foreign-function-interface-ffi)
-12. [Function Pointers](#12-function-pointers)
-13. [Preprocessor](#13-preprocessor)
-14. [Program Entry Point](#14-program-entry-point)
-15. [Exception Handling](#15-exception-handling)
-16. [Inline Assembly](#16-inline-assembly)
-17. [Special Features NOT Supported](#17-special-features-not-supported)
-
-### Implementation Guide
-18. [Haskell Transpiler Architecture](#18-haskell-transpiler-architecture)
-19. [Examples](#19-examples)
-20. [Transpiler Usage](#20-transpiler-usage)
-21. [Standard Library / Runtime](#21-standard-library--runtime)
-22. [Implementation Roadmap](#22-implementation-roadmap)
-23. [Project File Structure](#23-project-file-structure)
-24. [Testing Strategy](#24-testing-strategy)
-25. [Future Extensions](#25-future-extensions)
-
-### Real-World Applications
-26. [BurningBush Deep Learning Framework](#26-burningbush-deep-learning-framework-considerations)
-27. [Conclusion](#27-conclusion)
-
----
+# HolyC to C Transpiler - Design Document
 
 ## 1. Overview
 
-**HolyC-** is a simplified dialect of HolyC designed to be easily transpiled to C while maintaining the distinctive aesthetic and feel of the original language. The primary design goal is simplicity in implementation via a Haskell transpiler, making pragmatic compromises where necessary while preserving HolyC's unique character.
+### 1.1 Goals
+- Create a faithful HolyC to C transpiler that preserves the semantics and behavior of HolyC programs
+- Generate clean, readable C code that follows C99/C11 standards
+- Implement all key HolyC language features
+- Keep the transpiler implementation simple and maintainable
+- Written entirely in Python with minimal dependencies
 
-### Design Philosophy
+### 1.2 Non-Goals
+- Perfect compile-time execution (#exe{}) - will translate to runtime where possible
+- Full TempleOS system calls - will provide stubs/wrappers
+- Binary compatibility with TempleOS
+- Inline assembly support (initially - can be added in later phases)
 
-1. **Transpiler-First**: Every language feature must have a straightforward mapping to C
-2. **Sugar Over Substance**: Most HolyC- features are syntactic sugar over C constructs
-3. **Minimal Runtime**: Avoid features requiring complex runtime support
-4. **Type System Compatibility**: Leverage C's type system directly
-5. **Parse Simplicity**: Favor unambiguous, easily parseable syntax
+## 2. Architecture
 
-### Reference Implementation: BurningBush
-
-HolyC- is specifically designed to support real-world projects like **BurningBush**, a GPU-accelerated deep learning framework with a three-language architecture:
-
-- **Frontend**: HolyC- (tensor management, autograd, training loops)
-- **Backend**: CUDA (GPU kernels)
-- **Glue**: C ABI (shared library interface)
-
-Key features for BurningBush:
-- ✅ FFI declarations (`_extern`) for CUDA kernel calls
-- ✅ Opaque pointers (`U0 *`) for GPU memory handles
-- ✅ Function pointers for autograd backward functions
-- ✅ Classes with single inheritance for module hierarchy
-- ✅ Zero-overhead transpilation to C
-
-See Section 23 for detailed BurningBush integration examples.
-
-## 2. Type System
-
-### 2.1 Primitive Types
-
-HolyC- adopts HolyC's distinctive type names as direct aliases to C types:
-
+### 2.1 Pipeline Overview
 ```
-HolyC-          C Equivalent        Description
-------          ------------        -----------
-U0              void               Zero-size void type
-I8              int8_t             Signed 8-bit integer
-U8              uint8_t            Unsigned 8-bit integer
-I16             int16_t            Signed 16-bit integer
-U16             uint16_t           Unsigned 16-bit integer
-I32             int32_t            Signed 32-bit integer
-U32             uint32_t           Unsigned 32-bit integer
-I64             int64_t            Signed 64-bit integer
-U64             uint64_t           Unsigned 64-bit integer
-F64             double             64-bit floating point
-Bool            bool               Boolean type
-None!           float              No 32 bit float in HolyC-!
+HolyC Source → Lexer → Parser → AST → Semantic Analyzer → Code Generator → C Source
 ```
 
-**Transpilation Strategy**: Generate typedefs in the output C header:
-
-```c
-typedef void U0;
-typedef int8_t I8;
-typedef uint8_t U8;
-// ... etc
+### 2.2 Component Structure
+```
+holyc_transpiler/
+├── lexer.py          # Tokenization
+├── parser.py         # Syntax analysis and AST construction
+├── ast_nodes.py      # AST node definitions
+├── semantic.py       # Type checking and symbol resolution
+├── codegen.py        # C code generation
+├── types.py          # HolyC type system
+├── runtime.py        # Generate runtime support header
+└── main.py           # CLI entry point
 ```
 
-### 2.2 Note on I0
+## 3. HolyC Type System Translation
 
-We omit `I0` (signed 0-byte int) as it's esoteric and has no practical C equivalent.
+### 3.1 Built-in Types Mapping
 
-### 2.3 Pointers and Arrays
+| HolyC Type | C Type | Notes |
+|------------|--------|-------|
+| U0 | void | Zero size void |
+| I8 | int8_t | char |
+| U8 | uint8_t | unsigned char |
+| I16 | int16_t | short |
+| U16 | uint16_t | unsigned short |
+| I32 | int32_t | int |
+| U32 | uint32_t | unsigned int |
+| I64 | int64_t | long (64-bit) |
+| U64 | uint64_t | unsigned long |
+| F64 | double | No F32 support |
 
-Standard C syntax:
-- Pointers: `U8 *ptr`
-- Arrays: `I64 arr[10]`
-
-## 3. Functions
-
-### 3.1 Function Declaration
-
-**HolyC- Syntax:**
+### 3.2 Sub-integer Access
+HolyC allows accessing sub-parts of integers:
 ```holyc
-U0 MyFunction(I64 x, U8 *str)
-{
-  // body
+I64 i = 0x123456780000DEF0;
+i.u16[1] = 0x9ABC;
+```
+
+**Translation Strategy:**
+Generate a union wrapper for each integer variable that needs sub-access:
+```c
+typedef union {
+    int64_t value;
+    struct {
+        uint8_t u8[8];
+        int8_t i8[8];
+        uint16_t u16[4];
+        int16_t i16[4];
+        uint32_t u32[2];
+        int32_t i32[2];
+    };
+} holyc_i64_t;
+```
+
+## 4. Key Language Features
+
+### 4.1 Function Calls Without Parentheses
+**HolyC:**
+```holyc
+Dir;
+Dir();
+Dir("*");
+```
+
+**Translation:** Always emit parentheses in C:
+```c
+Dir();
+Dir();
+Dir("*");
+```
+
+**Implementation:** Parser detects bare identifiers in statement context and converts to call expressions.
+
+### 4.2 Default Arguments Not At End
+**HolyC:**
+```holyc
+U0 Test(I64 i=4, I64 j, I64 k=5) {
+    Print("%X %X %X\n", i, j, k);
+}
+Test(,3);  // i=4, j=3, k=5
+```
+
+**Translation Strategy:**
+- Generate wrapper functions for each calling pattern
+- Use sentinel values to detect omitted arguments
+```c
+void Test_impl(int64_t i, int64_t j, int64_t k) {
+    holyc_print("%X %X %X\n", i, j, k);
+}
+
+void Test_default_i_k(int64_t j) {
+    Test_impl(4, j, 5);
 }
 ```
 
-**Transpiles to C:**
+### 4.3 String/Char Literal Syntax Sugar
+**HolyC:**
+```holyc
+"Hello World\n";           // Calls Print()
+"%s age %d\n", name, age;  // Calls Print()
+'' drv;                    // Calls PutChars()
+'*';                       // Calls PutChars()
+```
+
+**Translation:**
 ```c
-void MyFunction(int64_t x, uint8_t *str)
-{
-  // body
+holyc_print("Hello World\n");
+holyc_print("%s age %d\n", name, age);
+holyc_putchars(drv);
+holyc_putchars('*');
+```
+
+**Implementation:** Parser recognizes string/char expressions in statement context.
+
+### 4.4 Multi-Character Literals
+**HolyC:**
+```holyc
+'ABC'  // equals 0x434241
+PutChars('Hello ');
+```
+
+**Translation:**
+```c
+0x434241
+holyc_putchars(0x6F6C6C6548ULL);  // 'Hello ' packed
+```
+
+**Implementation:** Lexer packs multi-char literals into uint64_t at tokenization.
+
+### 4.5 Postfix Type Casting
+**HolyC:** No explicit cast syntax, uses ToI64(), ToBool(), ToF64()
+
+**Translation:** Direct function mapping:
+```c
+int64_t ToI64(double x) { return (int64_t)x; }
+double ToF64(int64_t x) { return (double)x; }
+int ToBool(int64_t x) { return x != 0; }
+```
+
+### 4.6 No main() - Top-Level Code
+**HolyC:**
+```holyc
+I64 x = 5;
+"Hello\n";
+```
+
+**Translation Strategy:**
+Collect all top-level statements into a generated `_holyc_init()` function:
+```c
+int64_t x;
+
+void _holyc_init(void) {
+    x = 5;
+    holyc_print("Hello\n");
+}
+
+int main(int argc, char **argv) {
+    _holyc_init();
+    return 0;
 }
 ```
 
-### 3.2 Function Calls Without Parentheses
-
-**Syntax**: Functions with zero arguments can be called without parentheses.
-
-**HolyC-:**
+### 4.7 Variable Argument Count (argc/argv)
+**HolyC:**
 ```holyc
-PrintMenu;
-DoStuff();  // Also valid
-```
-
-**Transpilation**: If identifier is a known zero-argument function, emit `identifier()`:
-
-```c
-PrintMenu();
-DoStuff();
-```
-
-**Implementation Note**: Transpiler maintains a symbol table of function signatures to distinguish function names from variables.
-
-### 3.3 Default Arguments
-
-**SIMPLIFIED**: Default arguments are NOT supported in HolyC-. This feature requires complex handling and doesn't map cleanly to C.
-
-**Rationale**: C doesn't have default arguments. Simulating them would require function overloading or varargs, adding complexity. Users should define wrapper functions if needed.
-
-### 3.4 Public Keyword
-
-**Syntax**: Functions can be marked `public`:
-
-```holyc
-public U0 ExportedFunc()
-{
-  // ...
+I64 AddNums(...) {
+    I64 i, res=0;
+    for (i=0; i<argc; i++)
+        res += argv[i];
+    return res;
 }
 ```
 
-**Transpilation**: Maps to C's normal function (non-static):
-
+**Translation Strategy:**
+Use a struct to pass arguments:
 ```c
-void ExportedFunc()
-{
-  // ...
+typedef struct {
+    int64_t count;
+    int64_t *args;
+} holyc_varargs_t;
+
+int64_t AddNums(holyc_varargs_t varargs) {
+    int64_t argc = varargs.count;
+    int64_t *argv = varargs.args;
+    int64_t i, res = 0;
+    for (i = 0; i < argc; i++)
+        res += argv[i];
+    return res;
+}
+
+// Call site:
+int64_t args[] = {1, 2, 3};
+AddNums((holyc_varargs_t){3, args});
+```
+
+### 4.8 Chained Comparisons
+**HolyC:**
+```holyc
+if (5 < i < j+1 < 20)
+```
+
+**Translation:**
+```c
+if (5 < i && i < j+1 && j+1 < 20)
+```
+
+**Implementation:** Parser detects comparison chains and expands to logical AND.
+
+### 4.9 Switch Statement Extensions
+
+#### 4.9.1 Switch [] - Unchecked
+**HolyC:**
+```holyc
+switch [] (i) { ... }
+```
+
+**Translation:** Regular switch, document with comment:
+```c
+// Unchecked switch - assumes i is in range
+switch (i) { ... }
+```
+
+#### 4.9.2 Range Cases
+**HolyC:**
+```holyc
+case 4...7:
+```
+
+**Translation:** Multiple case labels:
+```c
+case 4: case 5: case 6: case 7:
+```
+
+#### 4.9.3 No-Value Cases
+**HolyC:**
+```holyc
+case: "Zero\n"; break;   // Starts at 0
+case: "One\n"; break;    // 1
+case 10: "Ten\n"; break;
+case: "Eleven\n"; break; // 11
+```
+
+**Translation:** Track and emit explicit values:
+```c
+case 0: holyc_print("Zero\n"); break;
+case 1: holyc_print("One\n"); break;
+case 10: holyc_print("Ten\n"); break;
+case 11: holyc_print("Eleven\n"); break;
+```
+
+#### 4.9.4 Sub-switches (start/end blocks)
+**HolyC:**
+```holyc
+switch (i) {
+    case 0: "Zero "; break;
+    start:
+        "[";
+        case 1: "One"; break;
+        case 3: "Three"; break;
+    end:
+        "] ";
+        break;
 }
 ```
 
-Functions without `public` are assumed public (for simplicity). We could support `static` for private functions.
-
-### 3.5 Variadic Functions
-
-**SIMPLIFIED**: Use C's standard variadic approach with `stdarg.h`.
-
-**HolyC-:**
-```holyc
-I64 Sum(I64 count, ...)
-{
-  // use va_list, va_start, va_arg, va_end
+**Translation Strategy:**
+Use nested blocks and goto for control flow:
+```c
+switch (i) {
+    case 0: 
+        holyc_print("Zero "); 
+        break;
+    case 1:
+    case 3: {
+        holyc_print("[");
+        switch (i) {
+            case 1: holyc_print("One"); break;
+            case 3: holyc_print("Three"); break;
+        }
+        holyc_print("] ");
+        break;
+    }
 }
 ```
 
-**Rationale**: HolyC's `argc`/`argv[]` magic requires runtime support. Standard C varargs are simpler and well-understood.
-
-## 4. Control Flow
-
-### 4.1 If/Else, While, For
-
-Standard C syntax - no changes needed.
-
-### 4.2 No Continue Statement
-
-**Constraint**: HolyC- does not have `continue`. Use `goto` instead.
-
-**Example:**
+### 4.10 Power Operator (`)
+**HolyC:**
 ```holyc
-for (i = 0; i < 10; i++) {
-  if (i == 5)
-    goto skip;
-  Print("i = %d\n", i);
-  skip:;
+x = 2`8;  // 2^8 = 256
+```
+
+**Translation:**
+```c
+x = holyc_pow(2, 8);
+```
+
+Where `holyc_pow()` is provided in runtime:
+```c
+double holyc_pow(double base, double exp) {
+    return pow(base, exp);
 }
 ```
 
-### 4.3 Switch Statements
+### 4.11 Operator Precedence
+HolyC has different precedence than C. Parser must handle:
+```
+, >> << / % &  ^  |  +  -  <  >  <=  >=  ==  !=  &&  ^^  ||  =  <<=  >>=  /=  &=  |=  ^=  +=  -=
+```
 
-**Standard switch**: Regular C syntax is supported.
+**Strategy:** Build proper precedence table in parser, then emit C with explicit parentheses.
 
-**SIMPLIFIED**: The following HolyC features are NOT supported:
-- `switch []` (unchecked switch)
-- Range cases (`case 4...7:`)
-- Empty case labels (auto-increment)
-- Sub-switch with `start`/`end`
-
-**Rationale**: These features don't exist in C and would require complex code generation.
-
-## 5. String and Character Literals
-
-### 5.1 Standalone String Literals as Statements
-
-One of HolyC's most distinctive features: string literals as statements.
-
-**HolyC-:**
+### 4.12 Try/Catch/Throw
+**HolyC:**
 ```holyc
-U0 Greet()
-{
-  "Hello, World!\n";
+try {
+    throw('ERRO');
+} catch {
+    if (Fs->except_ch == 'ERRO')
+        "Caught error\n";
 }
 ```
 
-**Transpilation**: Convert to `printf()` call:
-
+**Translation Strategy:**
+Use setjmp/longjmp:
 ```c
-void Greet()
-{
-  printf("Hello, World!\n");
+typedef struct {
+    jmp_buf jmp;
+    uint64_t except_ch;
+    int catch_except;
+} holyc_exception_ctx_t;
+
+holyc_exception_ctx_t *holyc_ex_ctx;
+
+void holyc_throw(uint64_t ch) {
+    holyc_ex_ctx->except_ch = ch;
+    longjmp(holyc_ex_ctx->jmp, 1);
 }
+
+// Usage:
+holyc_exception_ctx_t ex_ctx;
+holyc_exception_ctx_t *old_ctx = holyc_ex_ctx;
+holyc_ex_ctx = &ex_ctx;
+if (setjmp(ex_ctx.jmp) == 0) {
+    // try block
+    holyc_throw(0x4F525245ULL);
+} else {
+    // catch block
+    if (holyc_ex_ctx->except_ch == 0x4F525245ULL)
+        holyc_print("Caught error\n");
+}
+holyc_ex_ctx = old_ctx;
 ```
 
-### 5.2 Format Strings with Arguments
-
-**HolyC-:**
+### 4.13 Classes (Structs)
+**HolyC:**
 ```holyc
-"Name: %s, Age: %d\n", name, age;
-```
-
-**Transpiles to:**
-```c
-printf("Name: %s, Age: %d\n", name, age);
-```
-
-**Parser Note**: String literal followed by comma and expression list is a print statement.
-
-### 5.3 Variable Format Strings
-
-**HolyC-:**
-```holyc
-"" fmt, arg1, arg2;
-```
-
-**Transpiles to:**
-```c
-printf(fmt, arg1, arg2);
-```
-
-**Note**: Empty string literal signals format string is a variable.
-
-### 5.4 Character Literals as Statements
-
-**HolyC-:**
-```holyc
-'X';
-'\n';
-```
-
-**Transpiles to:**
-```c
-putchar('X');
-putchar('\n');
-```
-
-### 5.5 Multi-Character Literals
-
-**SIMPLIFIED**: NOT supported. Single quotes contain only single characters.
-
-**Rationale**: `'ABC'` as a packed integer is non-portable and rarely useful. Users can use explicit hex constants: `0x434241`.
-
-## 6. Operators
-
-### 6.1 Standard Operators
-
-Most C operators work identically: `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `~`, `<<`, `>>`, etc.
-
-### 6.2 Power Operator
-
-**Syntax**: `base ` exponent` (backtick operator)
-
-**HolyC-:**
-```holyc
-x = 2 ` 10;  // 2^10
-```
-
-**Transpiles to:**
-```c
-x = pow(2, 10);
-```
-
-**Note**: Requires `#include <math.h>` and linking with `-lm`.
-
-### 6.3 Chained Comparisons
-
-**SIMPLIFIED**: NOT supported.
-
-**Rationale**: `5 < i < 10` doesn't have a simple, readable C translation without introducing temporary variables. Users should use `&&`.
-
-### 6.4 No Ternary Operator
-
-**Constraint**: `? :` operator is NOT available in HolyC- (matching original HolyC).
-
-Use `if`/`else` instead.
-
-## 7. Type Casting
-
-### 7.1 Postfix Casting
-
-**HolyC-:**
-```holyc
-ptr(U8 *)
-value(I64)
-```
-
-**Transpiles to C prefix cast:**
-```c
-(uint8_t*)ptr
-(int64_t)value
-```
-
-**Parser Note**: `expression(Type)` transforms to `(Type)expression`.
-
-### 7.2 Conversion Functions
-
-Support helper functions for clarity:
-
-**HolyC-:**
-```holyc
-ToI64(x)
-ToF64(x)
-ToBool(x)
-```
-
-**Transpiles to:**
-```c
-((int64_t)(x))
-((double)(x))
-((bool)(x))
-```
-
-## 8. Classes (Structs)
-
-### 8.1 Class Declaration
-
-**HolyC- uses `class` keyword** (instead of `struct`):
-
-```holyc
-class Point
-{
-  I64 x;
-  I64 y;
+class MyClass {
+    I64 x;
+    U8 name[32];
 };
 ```
 
-**Transpiles to:**
+**Translation:**
 ```c
-typedef struct Point {
-  int64_t x;
-  int64_t y;
-} Point;
+typedef struct MyClass {
+    int64_t x;
+    uint8_t name[32];
+} MyClass;
 ```
 
-**Note**: We automatically typedef the struct so it can be used as `Point` instead of `struct Point`.
-
-### 8.2 Single Inheritance
-
-**HolyC-:**
+### 4.14 Union with Type Prefix
+**HolyC:**
 ```holyc
-class Base
-{
-  I64 value;
-};
-
-class Derived : Base
-{
-  I64 extra;
+I64i union MyUnion {
+    I8i i8[8];
+    U8i u8[8];
 };
 ```
 
-**Transpiles to C (struct embedding):**
+**Translation:**
 ```c
-typedef struct Base {
-  int64_t value;
-} Base;
+typedef union MyUnion {
+    int8_t i8[8];
+    uint8_t u8[8];
+} MyUnion;
 
-typedef struct Derived {
-  Base base;  // Embedded base struct
-  int64_t extra;
-} Derived;
+// "I64i" prefix means can be used as I64
 ```
 
-**Accessing base members:**
+### 4.15 lastclass Keyword
+**HolyC:**
 ```holyc
-Derived d;
-d.value = 10;  // Direct access
+U0 Process(MyClass *obj, lastclass type) {
+    // type is set to "MyClass"
+}
 ```
 
-**Transpiles to:**
+**Translation Strategy:**
+Generate type parameter:
 ```c
-Derived d;
-d.base.value = 10;  // Access through embedded base
+void Process(MyClass *obj, const char *type) {
+    // type = "MyClass"
+}
+// Call: Process(&obj, "MyClass");
 ```
 
-**Implementation Note**: Transpiler must track inheritance and rewrite member access for inherited fields.
-
-### 8.3 No Multiple Inheritance
-
-Only single inheritance is supported (matching original HolyC).
-
-## 9. Unions
-
-**Syntax**: `union` keyword (compatible with C):
-
+### 4.16 Meta Data for Classes
+**HolyC:**
 ```holyc
-union Value
-{
-  I64 i;
-  F64 f;
-  U8 *s;
+class Person {
+    U8 name[32] format "Name: %s";
+    I64 age format "Age: %d";
 };
 ```
 
-**Transpiles directly:**
+**Translation Strategy:**
+Generate metadata tables:
 ```c
-typedef union Value {
-  int64_t i;
-  double f;
-  uint8_t *s;
-} Value;
+typedef struct Person {
+    uint8_t name[32];
+    int64_t age;
+} Person;
+
+static const char *Person_name_format = "Name: %s";
+static const char *Person_age_format = "Age: %d";
 ```
 
-## 10. Memory Management
+### 4.17 No continue Statement
+**HolyC:** Use `goto` instead
 
-### 10.1 Standard Library Functions
+**Translation:** Leave as-is, C supports both goto and continue.
 
-Use C standard library names directly:
-- `malloc()`, `calloc()`, `realloc()`, `free()`
-
-### 10.2 HolyC-Style Memory Functions (Optional Sugar)
-
-Optionally support HolyC names as aliases:
-
-**HolyC-:**
+### 4.18 Lock Blocks
+**HolyC:**
 ```holyc
-MAlloc(size)
-CAlloc(size)
-Free(ptr)
+lock {
+    counter++;
+}
 ```
 
-**Transpiles to:**
+**Translation:**
 ```c
-malloc(size)
-calloc(1, size)  // CAlloc allocates and zeroes
-free(ptr)
+// Simplified - use atomic operations or mutexes
+__atomic_fetch_add(&counter, 1, __ATOMIC_SEQ_CST);
 ```
 
-## 10.3 Opaque Pointers
+### 4.19 Preprocessor Directives
+Most directives translate directly:
+- `#include` → `#include`
+- `#define` → `#define`
+- `#if/#ifdef/#ifndef/#else/#endif` → same
 
-HolyC- supports opaque pointer types for external resources (GPU memory, handles, etc.):
+**Special Cases:**
+- `#exe{}` - Limited support, evaluate at transpile time where possible
+- `#ifaot/#ifjit` - Treat as `#if 1` or `#if 0` based on mode
 
-**HolyC-:**
+### 4.20 External Function Declarations (FFI)
+HolyC provides several keywords for interfacing with external C libraries:
+
+**extern**: Bind to existing symbol in symbol table (JIT) or import at load time (AOT)
 ```holyc
-U0 *gpu_ptr;  // Opaque pointer to GPU memory
-gpu_ptr = cuda_malloc(1024);
+extern I64 MyFunc(I64 x);
 ```
 
-**Transpiles to:**
+**import**: Import symbol from another module at load time
+```holyc
+import U0 ExternalFunc(U8 *str);
+```
+
+**_extern**: Bind to existing symbol with different name (C to asm binding)
+```holyc
+_extern MY_C_FUNCTION U0 MyCFunc(I64 x);
+```
+
+**_import**: Import symbol with different name from another module
+```holyc
+_import EXTERNAL_NAME U0 MyWrapper(I64 x);
+```
+
+**Translation Strategy:**
+Generate proper C declarations with external linkage:
 ```c
-void *gpu_ptr;
-gpu_ptr = cuda_malloc(1024);
+// extern I64 MyFunc(I64 x);
+extern int64_t MyFunc(int64_t x);
+
+// _extern MY_C_FUNCTION U0 MyCFunc(I64 x);
+extern void MyCFunc(int64_t x);  // Actual symbol: MY_C_FUNCTION
+
+// Link mappings tracked in symbol table
 ```
 
-**Note**: The transpiler treats `U0 *` as `void *` in C, perfect for opaque handles.
-
-## 11. Foreign Function Interface (FFI)
-
-### 11.1 External Function Declarations
-
-**Syntax**: Use `_extern` keyword to declare functions from C libraries:
-
-**HolyC-:**
-```holyc
-_extern U0 cuda_malloc(U0 **ptr, I64 size);
-_extern U0 cuda_free(U0 *ptr);
-_extern U0 cuda_add(U0 *out, U0 *a, U0 *b, I64 n);
-```
-
-**Transpiles to:**
+For `_extern` and `_import`, generate linker aliases or wrapper functions:
 ```c
-extern void cuda_malloc(void **ptr, int64_t size);
-extern void cuda_free(void *ptr);
-extern void cuda_add(void *out, void *a, void *b, int64_t n);
+// Option 1: Linker alias (if supported)
+extern void MY_C_FUNCTION(int64_t) __attribute__((alias("MyCFunc")));
+
+// Option 2: Wrapper function
+extern void MY_C_FUNCTION(int64_t x);
+void MyCFunc(int64_t x) {
+    MY_C_FUNCTION(x);
+}
 ```
 
-**Usage:**
+### 4.21 Dynamic Memory Management
+HolyC provides heap allocation with tracking:
+
+**Core Functions:**
 ```holyc
-U0 *ptr;
-cuda_malloc(&ptr, 1024);
-cuda_free(ptr);
+U8 *ptr = MAlloc(1024);        // Allocate 1KB
+Free(ptr);                      // Free memory
+I64 size = MSize(ptr);          // Query allocation size
 ```
 
-**Implementation Note**: The transpiler tracks `_extern` declarations and:
-1. Emits them as `extern` declarations in the C output
-2. Does not generate function bodies
-3. Assumes these functions are provided by linked libraries
-
-### 11.2 Linking with External Libraries
-
-**Build Process**: When compiling the generated C code, link against required libraries:
-
-```bash
-# Transpile HolyC- to C
-hcm myprogram.hc -o myprogram.c
-
-# Compile and link with external library
-gcc myprogram.c -o myprogram -L./lib -lmylibrary
+**Translation:**
+```c
+uint8_t *ptr = holyc_malloc(1024);
+holyc_free(ptr);
+int64_t size = holyc_msize(ptr);
 ```
 
-For BurningBush example:
-```bash
-# Build CUDA kernels into shared library
-cd backend && make  # Produces libburningbush.so
+**Runtime Implementation:**
+```c
+// holyc_runtime.h
+typedef struct {
+    size_t size;
+    uint8_t data[];
+} holyc_alloc_header_t;
 
-# Transpile HolyC- frontend
-hcm frontend/tensor.hc -o tensor.c
+static inline void* holyc_malloc(size_t size) {
+    holyc_alloc_header_t *hdr = malloc(sizeof(holyc_alloc_header_t) + size);
+    if (!hdr) return NULL;
+    hdr->size = size;
+    return hdr->data;
+}
 
-# Compile and link
-gcc tensor.c -o burningbush -L./backend -lburningbush -lcudart
+static inline void holyc_free(void *ptr) {
+    if (!ptr) return;
+    holyc_alloc_header_t *hdr = (holyc_alloc_header_t*)((char*)ptr - offsetof(holyc_alloc_header_t, data));
+    free(hdr);
+}
+
+static inline size_t holyc_msize(void *ptr) {
+    if (!ptr) return 0;
+    holyc_alloc_header_t *hdr = (holyc_alloc_header_t*)((char*)ptr - offsetof(holyc_alloc_header_t, data));
+    return hdr->size;
+}
 ```
 
-### 11.3 Type Compatibility
-
-HolyC- types map cleanly to C for FFI:
-
-| HolyC- | C | Notes |
-|--------|---|-------|
-| `U0 *` | `void *` | Opaque pointers |
-| `I64` | `int64_t` | Safe on 64-bit systems |
-| `U8 *` | `uint8_t *` | Byte arrays/strings |
-| `F64` | `double` | Floating point |
-
-**Important**: Avoid passing complex types (classes with inheritance) across FFI boundaries. Use simple structs or pointers only.
-
-### 11.4 Complete FFI Example
-
-**HolyC-:**
+**Variants:**
 ```holyc
-// Declare external CUDA functions
-_extern U0 cuda_malloc(U0 **ptr, I64 size);
-_extern U0 cuda_memcpy_h2d(U0 *dst, U0 *src, I64 size);
-_extern U0 cuda_add(U0 *out, U0 *a, U0 *b, I64 n);
-_extern U0 cuda_free(U0 *ptr);
+MAllocIdent(size, task);        // Alloc from specific task heap
+CAlloc(size);                   // Zero-initialized allocation
+StrNew(str);                    // Duplicate string
+```
 
-class CTensor
-{
-  U0 *data;  // GPU pointer
-  I64 size;
-};
+### 4.22 Pointers and Pointer Arithmetic
+HolyC supports full pointer operations:
 
-U0 TensorAdd(CTensor *out, CTensor *a, CTensor *b)
-{
-  cuda_add(out->data, a->data, b->data, a->size);
+**Pointer Declaration:**
+```holyc
+I64 *ptr;
+U8 **ptr_to_ptr;
+```
+
+**Pointer Arithmetic:**
+```holyc
+ptr++;                  // Advance by sizeof(I64)
+ptr += 5;               // Advance by 5 * sizeof(I64)
+I64 diff = ptr2 - ptr1; // Difference in elements
+```
+
+**Translation:** Direct C equivalent with proper types:
+```c
+int64_t *ptr;
+uint8_t **ptr_to_ptr;
+ptr++;
+ptr += 5;
+int64_t diff = ptr2 - ptr1;
+```
+
+**Dereferencing:**
+```holyc
+I64 val = *ptr;
+*ptr = 42;
+```
+
+**Address-of:**
+```holyc
+I64 x = 10;
+I64 *ptr = &x;
+```
+
+### 4.23 Function Pointers and Callbacks
+HolyC uses `&` prefix for function addresses:
+
+**Function Pointer Declaration:**
+```holyc
+U0 (*callback)(I64 x);
+```
+
+**Assignment:**
+```holyc
+callback = &MyFunction;
+```
+
+**Invocation:**
+```holyc
+callback(42);
+```
+
+**Translation:**
+```c
+void (*callback)(int64_t x);
+callback = MyFunction;  // & optional in C
+callback(42);
+```
+
+**Example - Callback System:**
+```holyc
+U0 ProcessArray(I64 *arr, I64 size, U0 (*fn)(I64)) {
+    I64 i;
+    for (i = 0; i < size; i++)
+        fn(arr[i]);
+}
+
+U0 PrintValue(I64 x) {
+    "%d\n", x;
 }
 
 // Usage
-CTensor a, b, c;
-a.size = 1024;
-cuda_malloc(&a.data, a.size * 8);  // 8 bytes per F64
-cuda_malloc(&b.data, b.size * 8);
-cuda_malloc(&c.data, c.size * 8);
-
-TensorAdd(&c, &a, &b);
-
-cuda_free(a.data);
-cuda_free(b.data);
-cuda_free(c.data);
+ProcessArray(data, 100, &PrintValue);
 ```
 
-**Generated C:**
+**Translation:**
 ```c
-#include "holycminus_runtime.h"
+void ProcessArray(int64_t *arr, int64_t size, void (*fn)(int64_t)) {
+    int64_t i;
+    for (i = 0; i < size; i++)
+        fn(arr[i]);
+}
 
-extern void cuda_malloc(void **ptr, int64_t size);
-extern void cuda_memcpy_h2d(void *dst, void *src, int64_t size);
-extern void cuda_add(void *out, void *a, void *b, int64_t n);
-extern void cuda_free(void *ptr);
+void PrintValue(int64_t x) {
+    holyc_print("%d\n", x);
+}
+
+// Usage
+ProcessArray(data, 100, PrintValue);
+```
+
+### 4.24 Classes with Methods
+HolyC classes support member functions:
+
+**Class Definition with Methods:**
+```holyc
+class CVector {
+    F64 x, y, z;
+};
+
+U0 CVector->Init(F64 _x, F64 _y, F64 _z) {
+    this->x = _x;
+    this->y = _y;
+    this->z = _z;
+}
+
+F64 CVector->Length() {
+    return Sqrt(this->x * this->x + this->y * this->y + this->z * this->z);
+}
+
+U0 CVector->Add(CVector *other) {
+    this->x += other->x;
+    this->y += other->y;
+    this->z += other->z;
+}
+```
+
+**Translation Strategy:**
+Convert methods to functions with explicit `this` parameter:
+```c
+typedef struct CVector {
+    double x, y, z;
+} CVector;
+
+void CVector_Init(CVector *this, double _x, double _y, double _z) {
+    this->x = _x;
+    this->y = _y;
+    this->z = _z;
+}
+
+double CVector_Length(CVector *this) {
+    return sqrt(this->x * this->x + this->y * this->y + this->z * this->z);
+}
+
+void CVector_Add(CVector *this, CVector *other) {
+    this->x += other->x;
+    this->y += other->y;
+    this->z += other->z;
+}
+```
+
+**Method Invocation:**
+```holyc
+CVector *v = MAlloc(sizeof(CVector));
+v->Init(1.0, 2.0, 3.0);
+F64 len = v->Length();
+```
+
+**Translation:**
+```c
+CVector *v = holyc_malloc(sizeof(CVector));
+CVector_Init(v, 1.0, 2.0, 3.0);
+double len = CVector_Length(v);
+```
+
+**Implementation Notes:**
+- Track method-to-function mapping in symbol table
+- Generate function names as `ClassName_MethodName`
+- Transform `obj->Method(args)` to `ClassName_Method(obj, args)`
+- `this` keyword becomes first parameter
+
+### 4.25 Class Inheritance
+HolyC supports single inheritance:
+
+**Base Class:**
+```holyc
+class CShape {
+    I64 x, y;
+};
+
+U0 CShape->Draw() {
+    "Drawing shape\n";
+}
+
+class CCircle : CShape {
+    F64 radius;
+};
+
+U0 CCircle->Draw() {
+    "Drawing circle\n";
+}
+
+F64 CCircle->Area() {
+    return 3.14159 * this->radius * this->radius;
+}
+```
+
+**Translation Strategy:**
+Embed base class as first member:
+```c
+typedef struct CShape {
+    int64_t x, y;
+} CShape;
+
+void CShape_Draw(CShape *this) {
+    holyc_print("Drawing shape\n");
+}
+
+typedef struct CCircle {
+    CShape base;  // Base class embedded
+    double radius;
+} CCircle;
+
+void CCircle_Draw(CCircle *this) {
+    holyc_print("Drawing circle\n");
+}
+
+double CCircle_Area(CCircle *this) {
+    return 3.14159 * this->radius * this->radius;
+}
+
+// Access base members:
+// circle->base.x, circle->base.y
+```
+
+**Method Resolution:**
+```holyc
+CCircle *c = MAlloc(sizeof(CCircle));
+c->x = 10;           // Access base member
+c->radius = 5.0;     // Access derived member
+c->Draw();           // Calls CCircle->Draw
+```
+
+**Translation:**
+```c
+CCircle *c = holyc_malloc(sizeof(CCircle));
+c->base.x = 10;
+c->radius = 5.0;
+CCircle_Draw(c);
+```
+
+**Note:** HolyC does not have virtual functions/dynamic dispatch. All method calls are statically resolved at compile time.
+
+### 4.26 Arrays and Array Operations
+HolyC supports both static and dynamic arrays:
+
+**Static Arrays:**
+```holyc
+I64 arr[10];
+I64 matrix[3][4];
+```
+
+**Dynamic Arrays:**
+```holyc
+I64 *arr = MAlloc(10 * sizeof(I64));
+```
+
+**Array Access:**
+```holyc
+arr[5] = 42;
+I64 val = arr[5];
+```
+
+**Multi-dimensional:**
+```holyc
+matrix[2][3] = 99;
+```
+
+**Translation:**
+```c
+int64_t arr[10];
+int64_t matrix[3][4];
+int64_t *arr = holyc_malloc(10 * sizeof(int64_t));
+arr[5] = 42;
+int64_t val = arr[5];
+matrix[2][3] = 99;
+```
+
+**Array Pointer Equivalence:**
+```holyc
+I64 *ptr = arr;     // Array decays to pointer
+ptr[3] = 100;       // Equivalent to *(ptr + 3) = 100
+```
+
+### 4.27 Opaque Pointers and Handle Types
+For interfacing with external libraries that use opaque types:
+
+**HolyC Pattern:**
+```holyc
+class CDeviceHandle {
+    U64 handle;  // Opaque handle from external library
+};
+
+_extern cuda_malloc U8* CudaMalloc(I64 size);
+_extern cuda_free U0 CudaFree(U8 *ptr);
+_extern cuda_memcpy U0 CudaMemcpy(U8 *dst, U8 *src, I64 size, I64 kind);
+
+class CTensor {
+    U8 *data;        // GPU pointer
+    I64 shape[4];
+    I64 ndim;
+};
+
+U0 CTensor->Init(I64 *dims, I64 n) {
+    I64 i, size = 1;
+    this->ndim = n;
+    for (i = 0; i < n; i++) {
+        this->shape[i] = dims[i];
+        size *= dims[i];
+    }
+    this->data = CudaMalloc(size * sizeof(F64));
+}
+
+U0 CTensor->Free() {
+    if (this->data)
+        CudaFree(this->data);
+}
+```
+
+**Translation:**
+```c
+typedef struct CDeviceHandle {
+    uint64_t handle;
+} CDeviceHandle;
+
+extern uint8_t* cuda_malloc(int64_t size);
+extern void cuda_free(uint8_t *ptr);
+extern void cuda_memcpy(uint8_t *dst, uint8_t *src, int64_t size, int64_t kind);
 
 typedef struct CTensor {
-  void *data;
-  int64_t size;
+    uint8_t *data;
+    int64_t shape[4];
+    int64_t ndim;
 } CTensor;
 
-void TensorAdd(CTensor *out, CTensor *a, CTensor *b) {
-  cuda_add(out->data, a->data, b->data, a->size);
+void CTensor_Init(CTensor *this, int64_t *dims, int64_t n) {
+    int64_t i, size = 1;
+    this->ndim = n;
+    for (i = 0; i < n; i++) {
+        this->shape[i] = dims[i];
+        size *= dims[i];
+    }
+    this->data = cuda_malloc(size * sizeof(double));
 }
 
-void __holycminus_init() {
-  CTensor a, b, c;
-  a.size = 1024;
-  cuda_malloc(&a.data, a.size * 8);
-  cuda_malloc(&b.data, b.size * 8);
-  cuda_malloc(&c.data, c.size * 8);
-  
-  TensorAdd(&c, &a, &b);
-  
-  cuda_free(a.data);
-  cuda_free(b.data);
-  cuda_free(c.data);
-}
-
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
+void CTensor_Free(CTensor *this) {
+    if (this->data)
+        cuda_free(this->data);
 }
 ```
 
-## 12. Function Pointers
+### 4.28 Function Attributes
+HolyC supports function flags for special behaviors:
 
-### 12.1 Function Pointer Declaration
-
-**Syntax**: Standard C function pointer syntax:
-
-**HolyC-:**
+**interrupt**: Interrupt handler (x86-specific)
 ```holyc
-U0 (*callback)(I64);  // Pointer to function taking I64, returning void
+interrupt U0 MyIRQHandler() {
+    // Handler code
+}
 ```
 
-**Transpiles to:**
+**haserrcode**: Exception frame has error code
+```holyc
+interrupt haserrcode U0 PageFaultHandler() {
+    // Handler with error code
+}
+```
+
+**public**: Export symbol for external use
+```holyc
+public U0 ExportedFunction(I64 x) {
+    // Visible to other modules
+}
+```
+
+**argpop/noargpop**: Control argument cleanup
+```holyc
+argpop U0 CallerCleans(I64 x, I64 y) {
+    // Arguments popped by caller
+}
+```
+
+**Translation:**
+Most attributes map to C calling conventions or are ignored:
 ```c
-void (*callback)(int64_t);
+// public → regular function (default in C)
+void ExportedFunction(int64_t x) { }
+
+// interrupt → depends on platform, may need inline asm
+__attribute__((interrupt)) void MyIRQHandler(void) { }
 ```
 
-### 12.2 Taking Function Addresses
+### 4.29 Register Variables
+HolyC allows explicit register allocation:
 
-Use `&` operator to get function address (matching HolyC):
-
-**HolyC-:**
+**Register Specification:**
 ```holyc
-U0 MyCallback(I64 x)
-{
-  "Callback: %d\n", x;
+U0 FastFunc() {
+    I64 reg R15 counter = 0;
+    I64 noreg temp = 100;
+    // counter prefers R15, temp forced to stack
 }
-
-U0 (*func_ptr)(I64) = &MyCallback;
-func_ptr(42);
 ```
 
-**Transpiles to:**
+**Translation:**
 ```c
-void MyCallback(int64_t x) {
-  printf("Callback: %d\n", x);
-}
-
-void (*func_ptr)(int64_t) = &MyCallback;
-func_ptr(42);
-```
-
-### 12.3 Function Pointers in Classes
-
-**HolyC-:**
-```holyc
-class COptimizer
-{
-  U0 (*step_fn)(U0 *);  // Function pointer for custom step logic
-  U0 *state;
-};
-
-U0 SGDStep(U0 *state)
-{
-  "Running SGD step\n";
-}
-
-COptimizer opt;
-opt.step_fn = &SGDStep;
-opt.step_fn(opt.state);
-```
-
-**Transpiles to:**
-```c
-typedef struct COptimizer {
-  void (*step_fn)(void *);
-  void *state;
-} COptimizer;
-
-void SGDStep(void *state) {
-  printf("Running SGD step\n");
-}
-
-// ... in __holycminus_init():
-COptimizer opt;
-opt.step_fn = &SGDStep;
-opt.step_fn(opt.state);
-```
-
-### 12.4 Typedef for Function Pointers (Optional Sugar)
-
-For cleaner syntax, support typedef'd function pointer types:
-
-**HolyC-:**
-```holyc
-class StepFn : U0 (*)(U0 *);  // Create type alias
-
-class COptimizer
-{
-  StepFn step;
-  U0 *state;
-};
-```
-
-**Transpiles to:**
-```c
-typedef void (*StepFn)(void *);
-
-typedef struct COptimizer {
-  StepFn step;
-  void *state;
-} COptimizer;
-```
-
-**Implementation Note**: The transpiler treats `class Name : FunctionType` specially when `FunctionType` is a function pointer signature, generating a typedef instead of struct inheritance.
-
-## 13. Preprocessor
-
-### 11.1 #include
-
-**Syntax**: Only double quotes supported (matching HolyC):
-
-```holyc
-#include "myheader.h"
-```
-
-**Transpiles to:**
-```c
-#include "myheader.h"
-```
-
-### 11.2 #define
-
-Standard C `#define` for constants:
-
-```holyc
-#define MAX_SIZE 100
-#define PI 3.14159
-```
-
-**SIMPLIFIED**: No function-like macros (matching HolyC philosophy).
-
-### 11.3 No #exe{}
-
-**Rationale**: Compile-time code execution requires interpreter integration. Far too complex for initial implementation.
-
-## 14. Program Entry Point
-
-### 14.1 Top-Level Code Execution
-
-**Feature**: Code outside functions executes at startup (HolyC style).
-
-**HolyC-:**
-```holyc
-"Program starting...\n";
-
-I64 global_val = 42;
-
-U0 Helper()
-{
-  "Helper called\n";
-}
-
-"Calling helper...\n";
-Helper;
-```
-
-**Transpilation Strategy**: Collect all top-level statements into a `__holycminus_init()` function:
-
-```c
-void __holycminus_init() {
-  printf("Program starting...\n");
-  printf("Calling helper...\n");
-  Helper();
-}
-
-int64_t global_val = 42;
-
-void Helper() {
-  printf("Helper called\n");
-}
-
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
+void FastFunc(void) {
+    register int64_t counter __asm__("r15") = 0;
+    int64_t temp = 100;
+    // Register hints may be ignored by C compiler
 }
 ```
 
-**Note**: Variable initializations remain as global initializers. Only statements are moved to init function.
+**Note:** C compilers typically ignore register hints, treating them as suggestions.
 
-### 12.2 Optional Main Function
+## 5. Abstract Syntax Tree (AST)
 
-User can optionally define a `Main()` function:
+### 5.1 Core Node Types
+```python
+class ASTNode:
+    pass
 
-**HolyC-:**
-```holyc
-U0 Main()
-{
-  "This is main\n";
-}
+class Program(ASTNode):
+    declarations: List[Declaration]
+    
+class Declaration(ASTNode):
+    pass
+
+class FunctionDecl(Declaration):
+    return_type: Type
+    name: str
+    parameters: List[Parameter]
+    body: Block
+    
+class VarDecl(Declaration):
+    type: Type
+    name: str
+    init: Optional[Expression]
+    is_global: bool
+    
+class ClassDecl(Declaration):
+    name: str
+    members: List[VarDecl]
+    base_class: Optional[str]
+    methods: List[FunctionDecl]
+
+class MethodDecl(FunctionDecl):
+    class_name: str
+    is_constructor: bool
+    
+class ExternDecl(Declaration):
+    return_type: Type
+    name: str
+    parameters: List[Parameter]
+    external_name: Optional[str]  # For _extern
+    is_import: bool  # extern vs import
+    
+class Statement(ASTNode):
+    pass
+
+class Block(Statement):
+    statements: List[Statement]
+    
+class IfStmt(Statement):
+    condition: Expression
+    then_block: Block
+    else_block: Optional[Block]
+    
+class WhileStmt(Statement):
+    condition: Expression
+    body: Block
+    
+class ForStmt(Statement):
+    init: Optional[Statement]
+    condition: Optional[Expression]
+    increment: Optional[Expression]
+    body: Block
+    
+class SwitchStmt(Statement):
+    expression: Expression
+    cases: List[CaseStmt]
+    is_unchecked: bool
+    
+class CaseStmt(ASTNode):
+    values: List[int]  # Can be range
+    is_range: bool
+    is_auto: bool  # No explicit value
+    statements: List[Statement]
+    is_subswitch: bool
+    subswitch_prefix: List[Statement]
+    subswitch_suffix: List[Statement]
+    
+class ReturnStmt(Statement):
+    value: Optional[Expression]
+    
+class TryCatchStmt(Statement):
+    try_block: Block
+    catch_block: Block
+    
+class ThrowStmt(Statement):
+    value: Expression
+    
+class ExpressionStmt(Statement):
+    expression: Expression
+    
+class Expression(ASTNode):
+    pass
+
+class BinaryOp(Expression):
+    op: str
+    left: Expression
+    right: Expression
+    
+class UnaryOp(Expression):
+    op: str
+    operand: Expression
+    
+class CallExpr(Expression):
+    function: Expression
+    arguments: List[Expression]
+    
+class MemberAccess(Expression):
+    object: Expression
+    member: str
+    is_method_call: bool
+
+class MethodCall(Expression):
+    object: Expression
+    method: str
+    arguments: List[Expression]
+    
+class ArrayAccess(Expression):
+    array: Expression
+    index: Expression
+
+class PointerDeref(Expression):
+    operand: Expression
+    
+class AddressOf(Expression):
+    operand: Expression
+    
+class Literal(Expression):
+    value: Any
+    type: Type
+    
+class Identifier(Expression):
+    name: str
+
+class ThisExpr(Expression):
+    pass  # 'this' keyword in methods
 ```
 
-**Transpilation**: If `Main()` exists, call it from generated `main()`:
+## 6. Implementation Phases
 
-```c
-void Main() {
-  printf("This is main\n");
-}
+### Phase 1: Foundation (Week 1-2)
+- [ ] Lexer with all HolyC tokens
+- [ ] Basic type system
+- [ ] Simple parser for variable declarations and assignments
+- [ ] Basic code generator
+- [ ] Runtime library header generation
+- [ ] CLI tool
 
-int main(int argc, char **argv) {
-  __holycminus_init();
-  Main();
-  return 0;
-}
-```
+### Phase 2: Control Flow (Week 3)
+- [ ] If/while/for statements
+- [ ] Basic switch statements
+- [ ] Function declarations and calls
+- [ ] Return statements
 
-## 15. Exception Handling
+### Phase 3: HolyC-Specific Features (Week 4-5)
+- [ ] String/char literal sugar
+- [ ] Multi-char literals
+- [ ] Chained comparisons
+- [ ] Power operator
+- [ ] Default arguments
+- [ ] Top-level code collection
 
-**SIMPLIFIED**: NOT supported initially.
+### Phase 4: Advanced Switch (Week 6)
+- [ ] Range cases
+- [ ] Auto-increment cases
+- [ ] Sub-switches
+- [ ] Unchecked switches
 
-**Rationale**: HolyC's `try`/`catch`/`throw` has unique semantics that don't map to C. Would require setjmp/longjmp and significant runtime support.
+### Phase 5: Object System (Week 7)
+- [ ] Classes (structs)
+- [ ] Class methods
+- [ ] Method invocation (obj->Method())
+- [ ] this keyword
+- [ ] Single inheritance
+- [ ] Unions
+- [ ] Member access
+- [ ] Sub-integer access
+- [ ] Class metadata
 
-**Future**: Could add as layer over `setjmp`/`longjmp`.
+### Phase 6: Advanced Features (Week 8)
+- [ ] Try/catch/throw
+- [ ] Variadic functions (argc/argv)
+- [ ] Function pointers and callbacks
+- [ ] Dynamic memory (MAlloc/Free/MSize)
+- [ ] Pointer arithmetic
+- [ ] lastclass keyword
+- [ ] offset() function
+- [ ] Lock blocks
 
-## 16. Inline Assembly
+### Phase 7: External Interfacing (Week 9)
+- [ ] extern/import declarations
+- [ ] _extern/_import with name binding
+- [ ] External function calls
+- [ ] Opaque pointer types
+- [ ] C library interfacing
+- [ ] Function attributes (public, interrupt, etc.)
+- [ ] Register variable hints
 
-**SIMPLIFIED**: NOT supported.
+### Phase 8: Preprocessor (Week 10)
+- [ ] Basic directives
+- [ ] #exe{} limited support
+- [ ] Conditional compilation
 
-**Rationale**: Assembly is platform-specific and would require passing through unchanged, defeating portability. Users can use C's inline asm if needed in the generated C code.
+### Phase 9: Testing & Polish (Week 11-12)
+- [ ] Comprehensive test suite
+- [ ] Error messages
+- [ ] Code formatting options
+- [ ] Documentation
 
-## 17. Special Features NOT Supported
+## 7. Runtime Library
 
-The following HolyC features are explicitly NOT included in HolyC-:
-
-- `lastclass` keyword (requires compile-time reflection)
-- `offset()` function (just use C's `offsetof`)
-- Class member metadata (`fmtstr`, `fmtdata`)
-- `lock{}` blocks (use platform-specific mutexes)
-- `MSize()` heap function (C doesn't track allocation sizes)
-- Register hints (`reg`, `noreg`)
-- `no_warn` statement
-- Function modifiers: `interrupt`, `haserrcode`, `argpop`
-- `$` escape sequences (DolDoc features)
-
-## 18. Haskell Transpiler Architecture
-
-### 18.1 Pipeline Overview
-
-```
-HolyC- Source
-      ↓
-   [Lexer] → Tokens
-      ↓
-   [Parser] → AST
-      ↓
- [Resolver] → Annotated AST (symbol resolution)
-      ↓
-  [Codegen] → C Source
-```
-
-### 18.2 Lexer
-
-**Module**: `HolyCMinus.Lexer`
-
-**Responsibilities**:
-- Tokenize input stream
-- Handle HolyC- specific tokens (backtick, type names, etc.)
-- Track source locations for error reporting
-
-**Key Token Types**:
-```haskell
-data Token
-  = TKeyword Keyword
-  | TIdentifier Text
-  | TTypeKeyword Type  -- U0, I8, I64, etc.
-  | TStringLit Text
-  | TCharLit Char
-  | TIntLit Integer
-  | TFloatLit Double
-  | TOperator Operator
-  | TBacktick  -- Power operator
-  | TPunctuation Char
-  | ...
-```
-
-### 18.3 Parser
-
-**Module**: `HolyCMinus.Parser`
-
-**Technology**: Use parser combinators (`megaparsec` or `parsec`)
-
-**AST Data Types**:
-```haskell
-data Program = Program [TopLevel]
-
-data TopLevel
-  = TLFunction Function
-  | TLClass ClassDecl
-  | TLUnion UnionDecl
-  | TLStatement Statement  -- Top-level executable statement
-  | TLVarDecl Type Identifier (Maybe Expr)
-  | TLInclude FilePath
-  | TLDefine Identifier Text
-
-data Function = Function
-  { fnReturnType :: Type
-  , fnName :: Identifier
-  , fnParams :: [Parameter]
-  , fnBody :: [Statement]
-  , fnIsPublic :: Bool
-  }
-
-data Statement
-  = SExpr Expr
-  | SReturn (Maybe Expr)
-  | SIf Expr [Statement] (Maybe [Statement])
-  | SWhile Expr [Statement]
-  | SFor (Maybe Statement) (Maybe Expr) (Maybe Expr) [Statement]
-  | SSwitch Expr [Case]
-  | SBlock [Statement]
-  | SGoto Label
-  | SLabel Label
-  | SVarDecl Type Identifier (Maybe Expr)
-  | SPrintString Text [Expr]  -- Special: string literal statement
-  | SPutChar Char             -- Special: char literal statement
-
-data Expr
-  = EVar Identifier
-  | EIntLit Integer
-  | EFloatLit Double
-  | EStringLit Text
-  | ECharLit Char
-  | EBinOp BinOp Expr Expr
-  | EUnaryOp UnaryOp Expr
-  | EPostfixCast Expr Type     -- x(U8*)
-  | ECall Identifier [Expr]
-  | EMemberAccess Expr Identifier
-  | EArrayAccess Expr Expr
-  | EAddressOf Identifier
-  | EPower Expr Expr           -- Backtick operator
-  | ...
-
-data BinOp = Add | Sub | Mul | Div | Mod | ...
-```
-
-### 16.4 Resolver (Semantic Analysis)
-
-**Module**: `HolyCMinus.Resolver`
-
-**Responsibilities**:
-1. Build symbol table
-2. Resolve function calls without parentheses
-3. Track class inheritance for member access rewriting
-4. Validate types (minimal type checking)
-5. Annotate AST with resolved information
-
-**Symbol Table**:
-```haskell
-data Symbol
-  = SFunction Type [Parameter]
-  | SVariable Type
-  | SClass ClassInfo
-  | SUnion UnionInfo
-
-data ClassInfo = ClassInfo
-  { ciFields :: [(Identifier, Type)]
-  , ciParent :: Maybe Identifier
-  }
-
-type SymbolTable = Map Identifier Symbol
-```
-
-### 18.5 Code Generator
-
-**Module**: `HolyCMinus.Codegen`
-
-**Responsibilities**:
-- Transform AST to C code
-- Generate type definitions
-- Generate runtime initialization function
-- Handle special syntactic sugar transformations
-
-**Key Transformations**:
-
-1. **Type Names**: 
-   - `I64` → `int64_t`
-
-2. **Functions Without Parentheses**:
-   - `Foo;` → `Foo();`
-
-3. **String Literal Statements**:
-   - `"Hello %s\n", name;` → `printf("Hello %s\n", name);`
-
-4. **Postfix Casts**:
-   - `ptr(U8*)` → `(uint8_t*)ptr`
-
-5. **Power Operator**:
-   - `2 ` 8` → `pow(2, 8)`
-
-6. **Classes**:
-   ```holyc
-   class Foo { I64 x; };
-   ```
-   →
-   ```c
-   typedef struct Foo { int64_t x; } Foo;
-   ```
-
-7. **Inheritance**:
-   ```holyc
-   class Derived : Base { I64 y; };
-   Derived d;
-   d.value = 10;  // 'value' is in Base
-   ```
-   →
-   ```c
-   typedef struct Derived { Base base; int64_t y; } Derived;
-   Derived d;
-   d.base.value = 10;
-   ```
-
-8. **Top-Level Statements**:
-   Collect into `__holycminus_init()` and generate `main()`.
-
-### 18.6 Error Reporting
-
-Use source locations from lexer to provide helpful errors:
-```
-error: undefined function 'Foo' at line 42, column 5
-  |
-42|   Foo;
-  |   ^^^
-```
-
-### 18.7 Pretty Printer (Optional)
-
-**Module**: `HolyCMinus.Pretty`
-
-Use `prettyprinter` library to format generated C code nicely.
-
-## 20. Transpiler Usage
-
-### Command-Line Interface
-
-```bash
-hcm input.hc -o output.c
-hcm input.hc -o output.c --run  # Compile and run
-```
-
-### Compilation Pipeline
-
-```bash
-# Transpile
-hcm myprogram.hc -o myprogram.c
-
-# Compile with GCC
-gcc myprogram.c -o myprogram -lm
-
-# Run
-./myprogram
-```
-
-## 21. Standard Library / Runtime
-
-### 21.1 Minimal Runtime Header
-
-Generate a `holycminus_runtime.h` with:
+The transpiler will generate a `holyc_runtime.h` header that must be included:
 
 ```c
-#ifndef HOLYCMINUS_RUNTIME_H
-#define HOLYCMINUS_RUNTIME_H
+#ifndef HOLYC_RUNTIME_H
+#define HOLYC_RUNTIME_H
 
 #include <stdint.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <setjmp.h>
 #include <math.h>
 
-// Type aliases
+// Type definitions
+typedef void U0;
+// ... (all type mappings)
+
+// Integer unions for sub-access
+typedef union { /* ... */ } holyc_i64_t;
+typedef union { /* ... */ } holyc_u64_t;
+// ... (similar for other sizes)
+
+// Exception handling
+typedef struct {
+    jmp_buf jmp;
+    uint64_t except_ch;
+    int catch_except;
+} holyc_exception_ctx_t;
+
+extern holyc_exception_ctx_t *holyc_ex_ctx;
+
+void holyc_throw(uint64_t ch);
+
+// Variadic argument support
+typedef struct {
+    int64_t count;
+    int64_t *args;
+} holyc_varargs_t;
+
+## 7. Runtime Library
+
+The transpiler will generate a `holyc_runtime.h` header that must be included:
+
+```c
+#ifndef HOLYC_RUNTIME_H
+#define HOLYC_RUNTIME_H
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+#include <setjmp.h>
+#include <math.h>
+
+// Type definitions
 typedef void U0;
 typedef int8_t I8;
 typedef uint8_t U8;
@@ -1119,1167 +1261,497 @@ typedef uint32_t U32;
 typedef int64_t I64;
 typedef uint64_t U64;
 typedef double F64;
-typedef bool Bool;
 
-// Helper functions
-#define ToI64(x) ((I64)(x))
-#define ToF64(x) ((F64)(x))
-#define ToBool(x) ((Bool)(x))
+// Integer unions for sub-access
+typedef union {
+    int64_t value;
+    struct {
+        uint8_t u8[8];
+        int8_t i8[8];
+        uint16_t u16[4];
+        int16_t i16[4];
+        uint32_t u32[2];
+        int32_t i32[2];
+    };
+} holyc_i64_t;
 
-// Optional: HolyC-style memory functions
-#define MAlloc malloc
-#define CAlloc(size) calloc(1, size)
-#define Free free
+typedef union {
+    uint64_t value;
+    struct {
+        uint8_t u8[8];
+        uint16_t u16[4];
+        uint32_t u32[2];
+    };
+} holyc_u64_t;
 
-#endif // HOLYCMINUS_RUNTIME_H
+// Similar for I32, U32, I16, U16
+
+// Exception handling
+typedef struct {
+    jmp_buf jmp;
+    uint64_t except_ch;
+    int catch_except;
+} holyc_exception_ctx_t;
+
+extern holyc_exception_ctx_t *holyc_ex_ctx;
+
+void holyc_throw(uint64_t ch);
+
+// Variadic argument support
+typedef struct {
+    int64_t count;
+    int64_t *args;
+} holyc_varargs_t;
+
+// Runtime functions
+void holyc_print(const char *fmt, ...);
+void holyc_putchars(uint64_t chars);
+int64_t ToI64(double x);
+double ToF64(int64_t x);
+int ToBool(int64_t x);
+double holyc_pow(double base, double exp);
+
+// Memory management
+void* holyc_malloc(size_t size);
+void holyc_free(void *ptr);
+void* holyc_calloc(size_t size);
+size_t holyc_msize(void *ptr);
+char* holyc_strdup(const char *str);
+
+// Pointer utilities
+void holyc_memcpy(void *dst, const void *src, size_t n);
+void holyc_memset(void *ptr, int value, size_t n);
+int holyc_memcmp(const void *a, const void *b, size_t n);
+
+// TempleOS compatibility stubs
+// ... (Dir, various system functions)
+
+#endif
 ```
 
-### 21.2 Generated C Code Structure
+## 8. Code Generation Strategy
 
+### 8.1 General Principles
+1. **Readability First**: Generate clean, formatted C code
+2. **Comments**: Preserve HolyC comments, add transpiler hints
+3. **Naming**: Prefix generated symbols with `_holyc_` or `holyc_`
+4. **Indentation**: Maintain 4-space indentation
+5. **Line Mapping**: Emit `#line` directives to map back to HolyC source
+
+### 8.2 Output Structure
 ```c
-#include "holycminus_runtime.h"
+// Generated by HolyC transpiler from: source.HC
+#include "holyc_runtime.h"
 
 // Forward declarations
-void Foo();
-void Bar();
-
-// Type definitions
-typedef struct MyClass { ... } MyClass;
+// ...
 
 // Global variables
-I64 global_var = 42;
+// ...
 
 // Function definitions
-void Foo() { ... }
-void Bar() { ... }
+// ...
 
-// Initialization function
-void __holycminus_init() {
-  printf("Starting...\n");
-  Foo();
-}
-
-// Entry point
-int main(int argc, char **argv) {
-  __holycminus_init();
-  Main();  // If user defined Main()
-  return 0;
-}
-```
-
-## 19. Examples
-
-### 19.1 Hello World
-
-**HolyC-:**
-```holyc
-"Hello, World!\n";
-```
-
-**Generated C:**
-```c
-#include "holycminus_runtime.h"
-
-void __holycminus_init() {
-  printf("Hello, World!\n");
+// Top-level initialization
+void _holyc_init(void) {
+    // Top-level statements
 }
 
 int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
+    _holyc_init();
+    return 0;
 }
 ```
 
-### 19.2 Simple Function
+### 8.3 Pretty Printing
+- Use an indentation tracker
+- Break long lines intelligently
+- Align similar declarations
+- Group related code with blank lines
 
-**HolyC-:**
+## 9. Error Handling
+
+### 9.1 Lexer Errors
+- Unterminated strings
+- Invalid characters
+- Malformed numbers
+
+### 9.2 Parser Errors
+- Syntax errors with context
+- Show line and column
+- Suggest corrections where possible
+
+### 9.3 Semantic Errors
+- Undefined symbols
+- Type mismatches (where checkable)
+- Invalid member access
+
+### 9.4 Error Message Format
+```
+Error: [file.HC:line:col] Message
+    5 | I64 x = "string";
+        |         ^^^^^^^^ Cannot assign string to I64
+```
+
+## 10. Testing Strategy
+
+### 10.1 Unit Tests
+- Lexer: Token generation for all constructs
+- Parser: AST construction for each language feature
+- Code Gen: Output verification for each pattern
+
+### 10.2 Integration Tests
+Test complete HolyC programs:
+- Hello World variations
+- Mathematical calculations
+- Control flow
+- Data structures
+- Error handling
+- External library interfacing
+- Class hierarchies with inheritance
+- Callback systems
+
+### 10.3 Practical Example Programs
+
+#### 10.3.1 Vector Math Library with External FFI
 ```holyc
-I64 Add(I64 a, I64 b)
-{
-  return a + b;
-}
+// Interface to external math library
+_extern sqrt F64 Sqrt(F64 x);
+_extern sin F64 Sin(F64 x);
+_extern cos F64 Cos(F64 x);
 
-I64 result = Add(5, 10);
-"Result: %d\n", result;
-```
-
-**Generated C:**
-```c
-#include "holycminus_runtime.h"
-
-I64 Add(I64 a, I64 b);
-
-I64 result;
-
-I64 Add(I64 a, I64 b) {
-  return a + b;
-}
-
-void __holycminus_init() {
-  result = Add(5, 10);
-  printf("Result: %d\n", result);
-}
-
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
-}
-```
-
-### 19.3 Class with Methods
-
-**HolyC-:**
-```holyc
-class Point
-{
-  I64 x;
-  I64 y;
+class CVec3 {
+    F64 x, y, z;
 };
 
-U0 PrintPoint(Point *p)
-{
-  "Point(%d, %d)\n", p->x, p->y;
+U0 CVec3->Init(F64 _x, F64 _y, F64 _z) {
+    this->x = _x;
+    this->y = _y;
+    this->z = _z;
 }
 
-Point p;
-p.x = 10;
-p.y = 20;
-PrintPoint(&p);
-```
-
-**Generated C:**
-```c
-#include "holycminus_runtime.h"
-
-typedef struct Point {
-  I64 x;
-  I64 y;
-} Point;
-
-void PrintPoint(Point *p);
-
-Point p;
-
-void PrintPoint(Point *p) {
-  printf("Point(%d, %d)\n", p->x, p->y);
+F64 CVec3->Length() {
+    return Sqrt(this->x * this->x + this->y * this->y + this->z * this->z);
 }
 
-void __holycminus_init() {
-  p.x = 10;
-  p.y = 20;
-  PrintPoint(&p);
-}
-
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
-}
-```
-
-### 19.4 Power Operator
-
-**HolyC-:**
-```holyc
-F64 x = 2.0 ` 10.0;
-"2^10 = %f\n", x;
-```
-
-**Generated C:**
-```c
-#include "holycminus_runtime.h"
-
-F64 x;
-
-void __holycminus_init() {
-  x = pow(2.0, 10.0);
-  printf("2^10 = %f\n", x);
-}
-
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
-}
-```
-
-### 19.5 FFI with External Library (BurningBush-style)
-
-**HolyC-:**
-```holyc
-// Declare external CUDA functions
-_extern U0 cuda_malloc(U0 **ptr, I64 size);
-_extern U0 cuda_add(U0 *out, U0 *a, U0 *b, I64 n);
-_extern U0 cuda_free(U0 *ptr);
-
-class CTensor
-{
-  U0 *data;
-  I64 size;
-};
-
-CTensor* CreateTensor(I64 size)
-{
-  CTensor *t = MAlloc(sizeof(CTensor));
-  t->size = size;
-  cuda_malloc(&t->data, size * 8);
-  return t;
-}
-
-// Create and add tensors on GPU
-CTensor *a = CreateTensor(1024);
-CTensor *b = CreateTensor(1024);
-CTensor *c = CreateTensor(1024);
-
-cuda_add(c->data, a->data, b->data, 1024);
-"Tensors added on GPU\n";
-
-cuda_free(a->data);
-cuda_free(b->data);
-cuda_free(c->data);
-```
-
-**Generated C:**
-```c
-#include "holycminus_runtime.h"
-
-// External declarations
-extern void cuda_malloc(void **ptr, int64_t size);
-extern void cuda_add(void *out, void *a, void *b, int64_t n);
-extern void cuda_free(void *ptr);
-
-// Type definitions
-typedef struct CTensor {
-  void *data;
-  int64_t size;
-} CTensor;
-
-// Function declarations
-CTensor* CreateTensor(int64_t size);
-
-// Function definitions
-CTensor* CreateTensor(int64_t size) {
-  CTensor *t = malloc(sizeof(CTensor));
-  t->size = size;
-  cuda_malloc(&t->data, size * 8);
-  return t;
-}
-
-// Initialization
-void __holycminus_init() {
-  CTensor *a = CreateTensor(1024);
-  CTensor *b = CreateTensor(1024);
-  CTensor *c = CreateTensor(1024);
-  
-  cuda_add(c->data, a->data, b->data, 1024);
-  printf("Tensors added on GPU\n");
-  
-  cuda_free(a->data);
-  cuda_free(b->data);
-  cuda_free(c->data);
-}
-
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
-}
-```
-
-**Compile and link:**
-```bash
-# Transpile
-hcm tensor_example.hc -o tensor_example.c
-
-# Compile with CUDA library
-gcc tensor_example.c -o tensor_example -L./lib -lburningbush -lcudart
-
-# Run
-./tensor_example
-```
-
-## 22. Implementation Roadmap
-
-### Phase 1: Core Transpiler
-1. Lexer for basic tokens
-2. Parser for simple functions and statements
-3. Basic code generator
-4. Type definitions
-5. String literal statements
-
-### Phase 2: Classes and Structures
-1. Class/struct declarations
-2. Member access
-3. Single inheritance
-4. Unions
-
-### Phase 3: FFI and Interop
-1. `_extern` declarations
-2. Function pointers
-3. Opaque pointer types
-4. Symbol table for external functions
-
-### Phase 4: Syntactic Sugar
-1. Function calls without parentheses
-2. Postfix type casting
-3. Power operator
-4. Character literal statements
-
-### Phase 5: Top-Level Code
-1. Initialization function generation
-2. Main function handling
-3. Global variable initialization
-
-### Phase 6: Polish
-1. Error messages
-2. Source location tracking
-3. Pretty printing
-4. Optimization flags
-5. Documentation
-
-## 23. Project File Structure
-
-The HolyC- transpiler project follows a clean, modular structure optimized for development and distribution.
-
-### 23.1 Repository Layout
-
-```
-holycminus/
-├── src/
-│   ├── HolyCMinus/
-│   │   ├── Lexer.hs              # Tokenization
-│   │   ├── Parser.hs             # AST generation
-│   │   ├── AST.hs                # AST data types
-│   │   ├── Resolver.hs           # Symbol resolution & semantic analysis
-│   │   ├── Codegen.hs            # C code generation
-│   │   ├── Pretty.hs             # Pretty printing for C output
-│   │   ├── Error.hs              # Error reporting utilities
-│   │   └── Types.hs              # Shared types and utilities
-│   └── Main.hs                   # CLI entry point
-│
-├── runtime/
-│   ├── holycminus_runtime.h      # Standard runtime header
-│   └── README.md                 # Runtime documentation
-│
-├── tests/
-│   ├── unit/
-│   │   ├── TestLexer.hs         # Lexer unit tests
-│   │   ├── TestParser.hs        # Parser unit tests
-│   │   ├── TestResolver.hs      # Resolver tests
-│   │   └── TestCodegen.hs       # Codegen tests
-│   ├── integration/
-│   │   ├── TestBasic.HC         # Test of basic syntax  
-│   │   ├── TestFlasses.HC       # Test of classes and functions
-│   │   └── TestFfi.HC           # Test of the FFI
-│   └── main_test.hs              # Test suite entry point
-│
-├── docs/
-│   ├── design.md                 # This file
-│   ├── reference.md              # Complete language reference
-│   ├── context.md                # A shortened summary of the design
-│   └── checklist.md              # A checklist of what must be implemented
-│
-├── scripts/
-│   ├── build.sh                  # Build transpiler
-│   ├── test.sh                   # Run test suite
-│   ├── install.sh                # Install transpiler
-│   └── format.sh                 # Format Haskell code
-│
-├── holycminus.cabal              # Cabal build configuration
-├── stack.yaml                    # Stack build configuration
-├── Setup.hs                      # Cabal setup
-├── LICENSE                       # MIT or similar
-├── README.md                     # Project overview
-└── .gitignore                    # Git ignore rules
-```
-
-### 23.2 Core Module Descriptions
-
-**src/HolyCMinus/Lexer.hs**
-- Tokenizes HolyC- source code
-- Handles HolyC-specific tokens (type names, backtick operator)
-- Tracks source locations for error reporting
-- Uses `megaparsec` or similar parser combinator library
-
-**src/HolyCMinus/Parser.hs**
-- Builds Abstract Syntax Tree from token stream
-- Parses declarations, statements, expressions
-- Handles operator precedence
-- Reports syntax errors with locations
-
-**src/HolyCMinus/AST.hs**
-- Defines all AST data types
-- `Program`, `TopLevel`, `Function`, `Class`, etc.
-- Generic over annotations for multiple compilation passes
-
-**src/HolyCMinus/Resolver.hs**
-- Builds symbol table
-- Resolves function calls without parentheses
-- Tracks class inheritance for member access rewriting
-- Validates external function declarations
-- Annotates AST with resolved information
-
-**src/HolyCMinus/Codegen.hs**
-- Transforms annotated AST to C code
-- Handles all syntactic sugar transformations
-- Generates type definitions and forward declarations
-- Creates initialization function from top-level code
-- Manages include directives and dependencies
-
-**src/HolyCMinus/Pretty.hs**
-- Pretty prints generated C code
-- Formats with proper indentation
-- Uses `prettyprinter` library
-- Makes output readable and debuggable
-
-**src/HolyCMinus/Error.hs**
-- Error message formatting
-- Source location display
-- Helpful error suggestions
-- Warning system
-
-**src/Main.hs**
-- Command-line argument parsing
-- Pipeline orchestration (Lexer → Parser → Resolver → Codegen)
-- File I/O
-- Error handling and reporting
-
-### 23.3 Build Configuration
-
-**holycminus.cabal:**
-```haskell
-cabal-version: 2.4
-name: holycminus
-version: 0.1.0.0
-synopsis: HolyC to C transpiler
-license: MIT
-author: Your Name
-maintainer: your.email@example.com
-
-executable holycminus
-  main-is: Main.hs
-  other-modules:
-    HolyCMinus.Lexer,
-    HolyCMinus.Parser,
-    HolyCMinus.AST,
-    HolyCMinus.Resolver,
-    HolyCMinus.Codegen,
-    HolyCMinus.Pretty,
-    HolyCMinus.Error,
-    HolyCMinus.Types
-  build-depends:
-    base >= 4.14 && < 5,
-    megaparsec >= 9.0,
-    parser-combinators >= 1.3,
-    text >= 1.2,
-    containers >= 0.6,
-    mtl >= 2.2,
-    prettyprinter >= 1.7,
-    optparse-applicative >= 0.16,
-    filepath >= 1.4,
-    directory >= 1.3
-  hs-source-dirs: src
-  default-language: Haskell2010
-  ghc-options: -Wall -O2
-
-test-suite holycminus-test
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  other-modules:
-    LexerSpec,
-    ParserSpec,
-    ResolverSpec,
-    CodegenSpec
-  build-depends:
-    base,
-    holycminus,
-    hspec >= 2.7,
-    QuickCheck >= 2.14
-  hs-source-dirs: test
-  default-language: Haskell2010
-  ghc-options: -Wall
-```
-
-### 23.4 Development Workflow
-
-**1. Building the transpiler:**
-```bash
-# Using Stack
-cd holycminus
-stack build
-stack install  # Installs to ~/.local/bin
-
-# Using Cabal
-cabal build
-cabal install
-```
-
-**2. Running tests:**
-```bash
-stack test                        # All tests
-stack test --test-arguments="--match Lexer"  # Specific module
-```
-
-**3. Transpiling HolyC- code:**
-```bash
-hcm examples/hello_world.hc -o hello.c
-gcc hello.c -o hello -I./runtime
-./hello
-```
-
-**4. Development with examples:**
-```bash
-cd examples/burningbush
-./build.sh                        # Transpile all .hc files
-cd backend && make                # Build CUDA kernels
-cd ../abi && make                 # Build ABI wrapper
-gcc -o burningbush *.c -L./abi -lburningbush
-./burningbush
-```
-
-### 23.5 Distribution
-
-**Binary releases:**
-```
-holycminus-v0.1.0-linux-x64/
-├── bin/
-│   └── holycminus               # Compiled binary
-├── runtime/
-│   └── holycminus_runtime.h     # Runtime header
-├── examples/
-│   └── ...                      # Example programs
-└── README.md                    # Quick start guide
-```
-
-**Source distribution:**
-```bash
-cabal sdist                      # Creates tarball
-# Produces: dist/holycminus-0.1.0.0.tar.gz
-```
-
-### 23.6 CI/CD Pipeline
-
-**GitHub Actions workflow (.github/workflows/ci.yml):**
-```yaml
-name: CI
-on: [push, pull_request]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: haskell/actions/setup@v1
-        with:
-          ghc-version: '9.2'
-          cabal-version: '3.6'
-      
-      - name: Cache
-        uses: actions/cache@v2
-        with:
-          path: ~/.cabal
-          key: cabal-${{ hashFiles('**/*.cabal') }}
-      
-      - name: Build
-        run: cabal build
-      
-      - name: Test
-        run: cabal test
-      
-      - name: Generate examples
-        run: |
-          cabal run holycminus -- examples/hello_world.hc -o test.c
-          gcc test.c -o test -I./runtime
-          ./test
-```
-
-### 23.7 Documentation Structure
-
-**docs/ contents:**
-- `design.md` (this file) - Design decisions and architecture
-- `language_reference.md` - Complete language specification
-- `tutorial.md` - Step-by-step getting started
-
-## 24. Testing Strategy
-
-### Unit Tests
-- Lexer: token recognition
-- Parser: AST generation for each construct
-- Codegen: verify C output for each feature
-
-### Integration Tests
-- End-to-end: HolyC- → C → executable
-- Run generated programs and verify output
-- Test examples from original HolyC docs
-
-### Example Test Cases
-```haskell
-testHelloWorld :: IO ()
-testStringPrintf :: IO ()
-testFunctionCall :: IO ()
-testClassDeclaration :: IO ()
-testInheritance :: IO ()
-testPowerOperator :: IO ()
-testExternDeclaration :: IO ()
-testFunctionPointer :: IO ()
-testOpaquePointer :: IO ()
-```
-
-### Real-World Tests
-- BurningBush tensor operations (FFI with mock CUDA library)
-- BurningBush autograd graph construction
-- Module system (CLinear, CMLP)
-- Optimizer step functions
-
-**Example BurningBush Test:**
-```bash
-# Create mock CUDA library for testing
-gcc -shared -fPIC mock_cuda.c -o libmock_cuda.so
-
-# Transpile BurningBush tensor code
-hcm tests/tensor_test.hc -o tensor_test.c
-
-# Compile and link
-gcc tensor_test.c -L. -lmock_cuda -o tensor_test
-
-# Run test
-./tensor_test
-# Expected: "Tensor add test passed"
-```
-
-## 25. Future Extensions
-
-### Possible Additions
-- Exception handling via `setjmp`/`longjmp`
-- More compile-time features
-- Optimizer to reduce unnecessary temporaries
-- Better error messages with suggestions
-- REPL for interactive development
-- Debugger support (generate debug symbols)
-
-### Non-Goals
-- Full HolyC compatibility (too complex)
-- Assembly support (non-portable)
-- OS-specific features (graphics, task management)
-- JIT compilation
-
-## 26. BurningBush Deep Learning Framework Considerations
-
-This section addresses how HolyC- specifically supports building **BurningBush**, a GPU-accelerated deep learning framework with a three-language architecture (HolyC- frontend, CUDA backend, C ABI glue).
-
-### 26.1 Architecture Support
-
-HolyC- provides all necessary features for BurningBush's design:
-
-**Frontend (HolyC-)**:
-- Classes for tensor management (`CTensor`, `CAutoNode`)
-- Inheritance for module hierarchy (`CModule` → `CLinear` → layers)
-- Opaque pointers (`U0 *`) for GPU memory handles
-- FFI declarations (`_extern`) for CUDA kernel calls
-- Method-like syntax via helper functions
-
-**C ABI Glue Layer**:
-- External function declarations map to shared library exports
-- Type compatibility (I64 ↔ int64_t, U0* ↔ void*)
-- Simple calling convention
-
-**Memory Model**:
-- All tensors in GPU memory (host holds pointers only)
-- No F32 type needed (uses F64 or raw bytes)
-- Explicit memory management via FFI calls
-
-### 26.2 Core Tensor Class Example
-
-**HolyC- Code:**
-```holyc
-// External CUDA operations
-_extern U0 cuda_malloc(U0 **ptr, I64 size);
-_extern U0 cuda_free(U0 *ptr);
-_extern U0 cuda_add(U0 *out, U0 *a, U0 *b, I64 n);
-_extern U0 cuda_matmul(U0 *out, U0 *a, U0 *b, I64 m, I64 n, I64 k);
-_extern U0 cuda_relu_fwd(U0 *out, U0 *in, I64 n);
-
-class CTensor
-{
-  U0 *data;      // GPU pointer (opaque)
-  I64 *shape;    // Shape array
-  I64 ndim;      // Number of dimensions
-  Bool requires_grad;
-  CAutoNode *grad_fn;  // For autograd
-};
-
-U0 TensorInit(CTensor *self, I64 *shape, I64 ndim)
-{
-  I64 size = 1;
-  I64 i;
-  
-  self->shape = MAlloc(ndim * 8);  // sizeof(I64) = 8
-  self->ndim = ndim;
-  self->requires_grad = 0;  // false
-  self->grad_fn = 0;  // NULL
-  
-  for (i = 0; i < ndim; i++) {
-    self->shape[i] = shape[i];
-    size = size * shape[i];
-  }
-  
-  cuda_malloc(&self->data, size * 8);  // 8 bytes per F64
-}
-
-U0 TensorFree(CTensor *self)
-{
-  cuda_free(self->data);
-  Free(self->shape);
-}
-
-CTensor* TensorAdd(CTensor *a, CTensor *b)
-{
-  CTensor *out = MAlloc(sizeof(CTensor));
-  I64 size = 1;
-  I64 i;
-  
-  TensorInit(out, a->shape, a->ndim);
-  
-  for (i = 0; i < a->ndim; i++)
-    size = size * a->shape[i];
-  
-  cuda_add(out->data, a->data, b->data, size);
-  
-  return out;
-}
-```
-
-**Key Points**:
-- Opaque `U0 *data` pointer to GPU memory
-- Shape stored on host (plain C array)
-- FFI calls for all GPU operations
-- Manual memory management
-
-### 26.3 Module System Example
-
-**HolyC- Code:**
-```holyc
-class CModule
-{
-  U0 *state;  // Opaque state pointer
-};
-
-class CLinear : CModule
-{
-  CTensor *weight;
-  CTensor *bias;
-  I64 in_features;
-  I64 out_features;
-};
-
-U0 LinearInit(CLinear *self, I64 in_features, I64 out_features)
-{
-  I64 weight_shape[2];
-  I64 bias_shape[1];
-  
-  self->in_features = in_features;
-  self->out_features = out_features;
-  
-  weight_shape[0] = out_features;
-  weight_shape[1] = in_features;
-  self->weight = MAlloc(sizeof(CTensor));
-  TensorInit(self->weight, weight_shape, 2);
-  
-  bias_shape[0] = out_features;
-  self->bias = MAlloc(sizeof(CTensor));
-  TensorInit(self->bias, bias_shape, 1);
-  
-  // Initialize weights (would call CUDA kernel)
-  // xavier_uniform(self->weight);
-}
-
-CTensor* LinearForward(CLinear *self, CTensor *input)
-{
-  CTensor *out = MAlloc(sizeof(CTensor));
-  I64 batch_size = input->shape[0];
-  I64 out_shape[2];
-  
-  out_shape[0] = batch_size;
-  out_shape[1] = self->out_features;
-  TensorInit(out, out_shape, 2);
-  
-  // out = input @ weight.T + bias
-  cuda_matmul(out->data, input->data, self->weight->data,
-              batch_size, self->out_features, self->in_features);
-  
-  return out;
-}
-```
-
-**Key Points**:
-- Single inheritance (`CLinear : CModule`)
-- Tensor parameters as member variables
-- Forward function returns new tensor
-- All compute via FFI calls
-
-### 26.4 Autograd Tape System
-
-**HolyC- Code:**
-```holyc
-class CAutoNode
-{
-  CTensor *tensor;
-  CAutoNode **inputs;  // Array of parent nodes
-  I64 num_inputs;
-  U0 (*backward_fn)(CAutoNode *);  // Function pointer!
-};
-
-U0 AddBackward(CAutoNode *node)
-{
-  CTensor *grad = node->tensor->grad;
-  
-  // Gradient flows to both inputs
-  if (node->inputs[0]->tensor->requires_grad) {
-    // node->inputs[0]->tensor->grad += grad
-    cuda_add(node->inputs[0]->tensor->grad->data,
-             node->inputs[0]->tensor->grad->data,
-             grad->data,
-             GetTensorSize(grad));
-  }
-  
-  if (node->inputs[1]->tensor->requires_grad) {
-    cuda_add(node->inputs[1]->tensor->grad->data,
-             node->inputs[1]->tensor->grad->data,
-             grad->data,
-             GetTensorSize(grad));
-  }
-}
-
-CTensor* TensorAddWithGrad(CTensor *a, CTensor *b)
-{
-  CTensor *out = TensorAdd(a, b);
-  
-  if (a->requires_grad || b->requires_grad) {
-    CAutoNode *node = MAlloc(sizeof(CAutoNode));
-    node->tensor = out;
-    node->num_inputs = 2;
-    node->inputs = MAlloc(2 * 8);  // sizeof(pointer)
-    node->inputs[0] = a->grad_fn;
-    node->inputs[1] = b->grad_fn;
-    node->backward_fn = &AddBackward;  // Function pointer!
-    
-    out->grad_fn = node;
-    out->requires_grad = 1;  // true
-  }
-  
-  return out;
-}
-
-U0 TensorBackward(CTensor *self)
-{
-  CAutoNode *node = self->grad_fn;
-  
-  if (node) {
-    // Call backward function via function pointer
-    node->backward_fn(node);
-    
-    // Recursively backward through inputs
-    I64 i;
-    for (i = 0; i < node->num_inputs; i++) {
-      if (node->inputs[i])
-        TensorBackward(node->inputs[i]->tensor);
+U0 CVec3->Normalize() {
+    F64 len = this->Length();
+    if (len > 0.0) {
+        this->x /= len;
+        this->y /= len;
+        this->z /= len;
     }
-  }
-}
-```
-
-**Key Points**:
-- Function pointers for backward operations
-- Dynamic array of input nodes
-- Recursive backward pass
-- Gradient accumulation via CUDA
-
-### 26.5 Training Loop Example
-
-**HolyC- Code:**
-```holyc
-class CSGD
-{
-  CTensor **params;  // Array of tensor pointers
-  I64 num_params;
-  F64 lr;
-};
-
-_extern U0 cuda_sgd_step(U0 *param, U0 *grad, F64 lr, I64 size);
-
-U0 SGDStep(CSGD *self)
-{
-  I64 i;
-  for (i = 0; i < self->num_params; i++) {
-    CTensor *param = self->params[i];
-    if (param->grad) {
-      cuda_sgd_step(param->data, param->grad->data,
-                    self->lr, GetTensorSize(param));
-    }
-  }
 }
 
-U0 SGDZeroGrad(CSGD *self)
-{
-  I64 i;
-  for (i = 0; i < self->num_params; i++) {
-    CTensor *param = self->params[i];
-    if (param->grad) {
-      // Zero out gradients on GPU
-      _extern U0 cuda_zero(U0 *ptr, I64 size);
-      cuda_zero(param->grad->data, GetTensorSize(param) * 8);
-    }
-  }
-}
-
-// Training loop
-U0 TrainMLP()
-{
-  CLinear *fc1 = MAlloc(sizeof(CLinear));
-  CLinear *fc2 = MAlloc(sizeof(CLinear));
-  LinearInit(fc1, 784, 128);
-  LinearInit(fc2, 128, 10);
-  
-  CSGD *optim = MAlloc(sizeof(CSGD));
-  optim->num_params = 4;
-  optim->params = MAlloc(4 * 8);
-  optim->params[0] = fc1->weight;
-  optim->params[1] = fc1->bias;
-  optim->params[2] = fc2->weight;
-  optim->params[3] = fc2->bias;
-  optim->lr = 0.01;
-  
-  I64 epoch;
-  for (epoch = 0; epoch < 100; epoch++) {
-    // Forward pass
-    CTensor *h = LinearForward(fc1, x_train);
-    h = TensorReLU(h);
-    CTensor *pred = LinearForward(fc2, h);
-    
-    // Loss
-    CTensor *loss = CrossEntropyLoss(pred, y_train);
-    
-    "Epoch %d, Loss: ", epoch;
-    PrintTensor(loss);
-    '\n';
-    
-    // Backward pass
-    SGDZeroGrad(optim);
-    TensorBackward(loss);
-    
-    // Update weights
-    SGDStep(optim);
-  }
-}
-```
-
-**Key Points**:
-- Manual optimizer state management
-- Array of parameter pointers
-- Explicit training loop structure
-- FFI calls for weight updates
-
-### 26.6 Feature Checklist for BurningBush
-
-✅ **Supported (Essential)**:
-- Classes with single inheritance
-- Opaque pointers (`U0 *`) for GPU memory
-- FFI declarations (`_extern`) for CUDA kernels
-- Function pointers for backward operations
-- Dynamic arrays (pointer + count pattern)
-- Manual memory management
-- String formatting for logging
-- Standard control flow
-
-✅ **Supported (Nice-to-Have)**:
-- Zero-arg function calls without parens
-- String literal statements for logging
-- Postfix casts for pointer manipulation
-- Power operator for size calculations
-
-❌ **Not Needed**:
-- F32 type (uses F64 or raw bytes)
-- Exception handling (explicit error checking)
-- Multiple inheritance (single is sufficient)
-- Complex metaprogramming
-
-### 26.7 Build Workflow for BurningBush
-
-```bash
-# 1. Build CUDA kernels
-cd backend/kernels
-nvcc -shared -o libburningbush.so *.cu -lcudart
-
-# 2. Build C ABI wrapper
-cd ../../abi
-gcc -shared -c cuda_abi.cpp -o cuda_abi.o
-gcc -shared cuda_abi.o -L../backend/kernels -lburningbush -o libburningbush_abi.so
-
-# 3. Transpile HolyC- frontend
-cd ../frontend
-hcm tensor.hc -o tensor.c
-hcm autograd.hc -o autograd.c
-hcm nn/linear.hc -o nn_linear.c
-# ... transpile all frontend files
-
-# 4. Compile transpiled C code
-gcc tensor.c autograd.c nn_linear.c -o burningbush \
-    -L../abi -lburningbush_abi \
-    -Wl,-rpath,../abi
-
-# 5. Run
-./burningbush
-```
-
-### 26.8 Performance Considerations
-
-**HolyC- overhead**: Minimal! The transpiled C code is nearly identical to handwritten C:
-
-- No runtime interpretation
-- Direct function calls (inlined by C compiler)
-- Zero-cost abstractions (classes → structs)
-- Pointer arithmetic compiles identically
-
-**Bottlenecks are in CUDA**, not the frontend:
-- GEMM optimization (Simon Boehm's blog, 10 kernel variants)
-- FlashAttention (lubits.ch/flash)
-- Memory bandwidth (vectorized loads/stores)
-
-The HolyC- frontend adds **<1% overhead** compared to pure C, making it ideal for this use case.
-
-### 26.9 Example: Complete Tensor Add with Autograd
-
-**HolyC-:**
-```holyc
-_extern U0 cuda_malloc(U0 **ptr, I64 size);
-_extern U0 cuda_free(U0 *ptr);
-_extern U0 cuda_add(U0 *out, U0 *a, U0 *b, I64 n);
-
-class CTensor {
-  U0 *data;
-  I64 size;
-  Bool requires_grad;
-  CTensor *grad;
-};
-
-CTensor* TensorCreate(I64 size) {
-  CTensor *t = MAlloc(sizeof(CTensor));
-  t->size = size;
-  cuda_malloc(&t->data, size * 8);
-  t->requires_grad = 0;
-  t->grad = 0;
-  return t;
-}
-
-CTensor* Add(CTensor *a, CTensor *b) {
-  CTensor *out = TensorCreate(a->size);
-  cuda_add(out->data, a->data, b->data, a->size);
-  
-  if (a->requires_grad || b->requires_grad) {
-    out->requires_grad = 1;
-    // Store computation graph info...
-  }
-  
-  return out;
+CVec3* CVec3->Cross(CVec3 *other) {
+    CVec3 *result = MAlloc(sizeof(CVec3));
+    result->x = this->y * other->z - this->z * other->y;
+    result->y = this->z * other->x - this->x * other->z;
+    result->z = this->x * other->y - this->y * other->x;
+    return result;
 }
 
 // Usage
-CTensor *a = TensorCreate(1024);
-CTensor *b = TensorCreate(1024);
-a->requires_grad = 1;
-
-CTensor *c = Add(a, b);
-"Result computed on GPU\n";
+CVec3 *v1 = MAlloc(sizeof(CVec3));
+CVec3 *v2 = MAlloc(sizeof(CVec3));
+v1->Init(1.0, 0.0, 0.0);
+v2->Init(0.0, 1.0, 0.0);
+CVec3 *v3 = v1->Cross(v2);
+"Cross product: (%f, %f, %f)\n", v3->x, v3->y, v3->z;
 ```
 
-**Generated C** (cleaned up for readability):
-```c
-#include "holycminus_runtime.h"
+#### 10.3.2 Callback-Based Event System
+```holyc
+class CEvent {
+    U8 *name;
+    I64 data;
+};
 
-extern void cuda_malloc(void **ptr, int64_t size);
-extern void cuda_free(void *ptr);
-extern void cuda_add(void *out, void *a, void *b, int64_t n);
+U0 (*event_handler)(CEvent *evt);
 
-typedef struct CTensor {
-  void *data;
-  int64_t size;
-  bool requires_grad;
-  struct CTensor *grad;
-} CTensor;
-
-CTensor* TensorCreate(int64_t size) {
-  CTensor *t = malloc(sizeof(CTensor));
-  t->size = size;
-  cuda_malloc(&t->data, size * 8);
-  t->requires_grad = false;
-  t->grad = NULL;
-  return t;
+U0 RegisterHandler(U0 (*handler)(CEvent *)) {
+    event_handler = handler;
 }
 
-CTensor* Add(CTensor *a, CTensor *b) {
-  CTensor *out = TensorCreate(a->size);
-  cuda_add(out->data, a->data, b->data, a->size);
-  
-  if (a->requires_grad || b->requires_grad) {
-    out->requires_grad = true;
-    // Store computation graph info...
-  }
-  
-  return out;
+U0 TriggerEvent(U8 *name, I64 data) {
+    CEvent *evt = MAlloc(sizeof(CEvent));
+    evt->name = name;
+    evt->data = data;
+    if (event_handler)
+        event_handler(evt);
+    Free(evt);
 }
 
-void __holycminus_init() {
-  CTensor *a = TensorCreate(1024);
-  CTensor *b = TensorCreate(1024);
-  a->requires_grad = true;
-  
-  CTensor *c = Add(a, b);
-  printf("Result computed on GPU\n");
+U0 MyHandler(CEvent *evt) {
+    "Event: %s, Data: %d\n", evt->name, evt->data;
 }
 
-int main(int argc, char **argv) {
-  __holycminus_init();
-  return 0;
+// Usage
+RegisterHandler(&MyHandler);
+TriggerEvent("ButtonClick", 42);
+```
+
+#### 10.3.3 Device Driver Interface Pattern
+```holyc
+// External device driver interface
+_extern device_init I64 DeviceInit(U8 *name);
+_extern device_write U0 DeviceWrite(I64 handle, U8 *data, I64 size);
+_extern device_read I64 DeviceRead(I64 handle, U8 *buffer, I64 size);
+_extern device_close U0 DeviceClose(I64 handle);
+
+class CDevice {
+    I64 handle;
+    U8 *name;
+    I64 is_open;
+};
+
+U0 CDevice->Open(U8 *device_name) {
+    this->name = device_name;
+    this->handle = DeviceInit(device_name);
+    this->is_open = (this->handle >= 0);
+}
+
+U0 CDevice->Write(U8 *data, I64 size) {
+    if (this->is_open)
+        DeviceWrite(this->handle, data, size);
+}
+
+I64 CDevice->Read(U8 *buffer, I64 size) {
+    if (this->is_open)
+        return DeviceRead(this->handle, buffer, size);
+    return -1;
+}
+
+U0 CDevice->Close() {
+    if (this->is_open) {
+        DeviceClose(this->handle);
+        this->is_open = 0;
+    }
+}
+
+// Usage
+CDevice *dev = MAlloc(sizeof(CDevice));
+dev->Open("/dev/mydevice");
+U8 buffer[256];
+I64 bytes = dev->Read(buffer, 256);
+dev->Close();
+```
+
+#### 10.3.4 Memory Pool Allocator
+```holyc
+class CMemPool {
+    U8 *pool;
+    I64 size;
+    I64 used;
+    I64 *free_list;
+};
+
+U0 CMemPool->Init(I64 pool_size) {
+    this->size = pool_size;
+    this->pool = MAlloc(pool_size);
+    this->used = 0;
+    this->free_list = NULL;
+}
+
+U8* CMemPool->Alloc(I64 size) {
+    if (this->used + size > this->size)
+        return NULL;
+    U8 *ptr = this->pool + this->used;
+    this->used += size;
+    return ptr;
+}
+
+U0 CMemPool->Reset() {
+    this->used = 0;
+}
+
+U0 CMemPool->Destroy() {
+    Free(this->pool);
 }
 ```
 
-**Analysis**: The generated C is clean, efficient, and indistinguishable from handwritten code. The HolyC- syntax provides:
-1. Cleaner type names (`I64` vs `int64_t`)
-2. Simpler print statements
-3. Familiar HolyC aesthetic
-4. Zero runtime overhead
+#### 10.3.5 Array Container with Dynamic Growth
+```holyc
+class CArray {
+    I64 *data;
+    I64 size;
+    I64 capacity;
+};
 
-## 27. Conclusion
+U0 CArray->Init(I64 initial_capacity) {
+    this->capacity = initial_capacity;
+    this->size = 0;
+    this->data = MAlloc(initial_capacity * sizeof(I64));
+}
 
-HolyC- strikes a balance between preserving HolyC's distinctive character and pragmatic implementation simplicity. By carefully selecting which features to support and which to omit, we create a language that:
+U0 CArray->Push(I64 value) {
+    if (this->size >= this->capacity) {
+        // Grow array
+        this->capacity *= 2;
+        I64 *new_data = MAlloc(this->capacity * sizeof(I64));
+        I64 i;
+        for (i = 0; i < this->size; i++)
+            new_data[i] = this->data[i];
+        Free(this->data);
+        this->data = new_data;
+    }
+    this->data[this->size] = value;
+    this->size++;
+}
 
-1. **Looks like HolyC** - Type names, string statements, and overall aesthetic preserved
-2. **Transpiles cleanly to C** - Every feature maps straightforwardly
-3. **Easy to implement** - Haskell parser combinators and direct AST transformation
-4. **Practical to use** - Generated C code is readable and debuggable
-5. **Production-ready** - Suitable for real projects like BurningBush deep learning framework
+I64 CArray->Get(I64 index) {
+    if (index >= 0 && index < this->size)
+        return this->data[index];
+    return 0;
+}
 
-The resulting transpiler should be implementable in ~2000-3000 lines of Haskell, providing a fun and functional tribute to TempleOS while being genuinely useful for those who appreciate HolyC's syntax.
+U0 CArray->Destroy() {
+    Free(this->data);
+}
+```
 
-### Key Achievements
+### 10.4 Test Organization
+```
+tests/
+├── unit/
+│   ├── test_parser.py
+│   └── ...
+└── integration/
+    ├── hello_world.hc
+    └── ...
+```
 
-**For Language Designers**:
-- Demonstrates how to make a transpiler-first language
-- Shows pragmatic compromises for C interop
-- Proves that unique syntax doesn't require complex runtimes
+## 11. CLI Interface
 
-**For HolyC Enthusiasts**:
-- Preserves Terry Davis's distinctive design choices
-- Makes HolyC-style programming portable
-- Enables HolyC on any platform with a C compiler
+```bash
+# Basic usage
+holyc-transpile input.HC -o output.c
 
-**For Practitioners**:
-- Zero-overhead abstractions (classes, operator sugar)
-- Clean FFI for calling C/CUDA libraries
-- Suitable for systems programming and scientific computing
-- Reference implementation: BurningBush (GPU deep learning in HolyC-)
+# With runtime header generation
+holyc-transpile input.HC -o output.c --generate-runtime
 
-The language succeeds if:
-- You enjoy writing in it
-- The transpiler is maintainable
-- The generated C is readable
-- Real projects (like BurningBush) are built with it
+# Multiple files
+holyc-transpile file1.HC file2.HC -o combined.c
 
-HolyC- is a love letter to TempleOS, optimized for the real world.
+# Pretty print options
+holyc-transpile input.HC -o output.c --indent=4 --max-line-length=80
+
+# Debug output
+holyc-transpile input.HC --dump-tokens
+holyc-transpile input.HC --dump-ast
+holyc-transpile input.HC --verbose
+```
+
+## 12. Future Enhancements
+
+### 12.1 Optimization
+- Dead code elimination
+- Constant folding
+- Inline small functions
+
+### 12.2 Assembly Support
+- Parse basic asm blocks
+- Convert to GCC inline assembly
+
+### 12.3 Documentation Generation
+- Extract DolDoc comments
+- Generate Markdown/HTML docs
+
+### 12.4 IDE Integration
+- Language server protocol
+- VS Code extension
+- Syntax highlighting
+
+## 13. Dependencies
+
+### 13.1 Python Standard Library Only
+- `re` - Regular expressions for lexer
+- `argparse` - CLI argument parsing
+- `dataclasses` - AST node definitions
+- `typing` - Type hints
+- `pathlib` - File operations
+- `sys`, `os` - System operations
+
+### 13.2 Optional Dependencies
+- `pytest` - Testing (dev only)
+- `black` - Code formatting (dev only)
+- `mypy` - Type checking (dev only)
+
+## 14. Documentation
+
+### 14.1 User Documentation
+- README with quick start
+- Installation guide
+- Feature compatibility matrix
+- Examples gallery
+- Troubleshooting guide
+
+### 14.2 Developer Documentation
+- Architecture overview
+- Adding new features
+- Testing guidelines
+- Code style guide
+
+## 15. Success Criteria
+
+The transpiler is considered successful when it can:
+
+1. ✅ Transpile all example programs from holyc_spec.md
+2. ✅ Generate compilable C code (gcc/clang with -std=c11)
+3. ✅ Produce executables with identical behavior to HolyC
+4. ✅ Generate readable, well-formatted C code
+5. ✅ Provide helpful error messages
+6. ✅ Handle all key HolyC language features
+7. ✅ Support class methods and single inheritance
+8. ✅ Interface with external C libraries via extern/_extern
+9. ✅ Support function pointers and callbacks
+10. ✅ Handle dynamic memory allocation (MAlloc/Free)
+11. ✅ Process realistic HolyC programs (>500 lines)
+12. ✅ Support systems programming patterns (device drivers, pools, containers)
+13. ✅ Maintain <1 second transpile time for typical files
+14. ✅ Have >90% test coverage
+15. ✅ Include comprehensive documentation
+
+## 16. Limitations & Trade-offs
+
+### 16.1 Accepted Limitations
+- No TempleOS-specific system calls (provide stubs)
+- Limited #exe{} support (static evaluation only)
+- No JIT compilation features
+- No inline assembly (initially)
+- No direct memory access (can be added)
+
+### 16.2 Design Trade-offs
+- **Simplicity vs Performance**: Prioritize simple, correct translation over optimal C
+- **Compatibility vs Purity**: Generate idiomatic C even if verbose
+- **Features vs Timeline**: Core features first, advanced features later
+- **Error Detection**: Some errors caught at C compile time rather than transpile time
+
+## 17. Conclusion
+
+This design provides a clear path to building a faithful HolyC to C transpiler that:
+- Respects the unique features of HolyC
+- Generates clean, readable C code
+- Maintains simplicity in implementation
+- Can be built incrementally
+- Is fully testable
+- Supports advanced systems programming patterns
+- Enables seamless C library interfacing
+- Provides complete object-oriented programming support
+- Handles complex memory management scenarios
+
+The phased approach allows for steady progress while delivering working features at each stage. The focus on simplicity and readability ensures the transpiler remains maintainable and the generated code is debuggable.
+
+### 17.1 Advanced Use Cases Enabled
+
+This transpiler design supports sophisticated applications including:
+
+**Systems Programming**: Device drivers, kernel modules, embedded systems
+**Scientific Computing**: High-performance numerical libraries with external BLAS/LAPACK
+**Graphics Programming**: OpenGL/Vulkan wrappers, game engines
+**Hardware Acceleration**: CUDA/OpenCL interfaces, GPU computing
+**Real-time Systems**: Callback-based event loops, interrupt handlers
+**Data Structures**: Custom allocators, containers, trees, graphs
+**Network Programming**: Socket wrappers, protocol implementations
+
+The comprehensive FFI support, class system with methods, and pointer operations make HolyC suitable for any task requiring low-level control while maintaining the clean, concise syntax that makes HolyC unique.
