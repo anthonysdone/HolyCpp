@@ -13,7 +13,8 @@ U64 COUNT;
 U0 Show()
 {
   U32 x,y;
-  DocClear;
+  // Clear screen using ANSI escape codes
+  Print("\033[2J\033[H");
   for (y=0;y<HEIGHT;y++) {
     for (x=0;x<WIDTH;x++) {
       if (Universe[y][x])
@@ -73,55 +74,18 @@ U0 Init()
 
 U0 Life()
 {
-  CMenuEntry *tempse;
-
-  MenuPush(
-    "File {"
-    "  Abort(,CH_SHIFT_ESC);"
-    "  Exit(,CH_ESC);"
-    "}"
-    "Play {"
-    "  Restart(,'\n');"
-    "}"
-  );
- 
-  SettingsPush; // See $LK,"SettingsPush",A="MN:SettingsPush"$
-  Fs->text_attr=BLACK<<4+LTGRAY;
-  WinMax;
-  WinBorder;
-  AutoComplete;
-  Preempt;
   Init;
 
-  DocClear;
-  Fs->draw_it=&DrawIt;
-  Fs->win_inhibit=WIG_TASK_DFT-WIF_SELF_FOCUS
-    -WIF_SELF_BORDER-WIF_FOCUS_TASK_MENU;
+  Print("\nWelcome to Conway's Game of Life!\n");
+  Print("The simulation will run continuously.\n");
+  Print("Press Ctrl+C to exit.\n\n");
+  Sleep(2000);
 
-  PopUpOk("
-  Welcome to Conway's Game of Life!\n
-  Press ENTER to restart");
-
-  try {
-    while (TRUE) {
-      switch (ScanChar) {
-        case CH_ESC:
-        case CH_SHIFT_ESC:
-          goto wg_done;
-        case '\n':
-          Init;
-          break;
-      }
-      Show;
-      Evolve;
-      Sleep(SLEEP);
-      COUNT++;
-    }
-wg_done:
-  } catch {
-    PutExcept;
+  while (TRUE) {
+    Show;
+    Evolve;
+    Sleep(SLEEP);
+    COUNT++;
   }
-  SettingsPop;
-  MenuPop;
 }
 Life;
