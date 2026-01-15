@@ -12,7 +12,7 @@ class SourceLocation:
         if self.file: 
             return f"{self.file}:{self.line}:{self.column}"
         return f"{self.line}:{self.column}"
-    
+
 class ASTNode: 
     def __init__(self, location=None): 
         self.location = location
@@ -304,6 +304,13 @@ class PointerDeref(Expression):
         return f"PointerDeref(*{self.operand})"
 
 @dataclass
+class AddressOf(Expression):
+    operand: Expression
+
+    def __repr__(self) -> str: 
+        return f"AddressOf(&{self.operand})"
+
+@dataclass
 class Literal(Expression): 
     value: Any
     type: Type
@@ -344,4 +351,101 @@ class ASTVisitor:
     def generic_visit(self, node) -> Any: 
         raise NotImplementedError(f"No visit method for {type(node).__name__}")
 
+    def visit_Program(self, node) -> Any:
+        pass
+
+    def visit_FunctionDecl(self, node) -> Any:
+        pass
     
+    def visit_MethodDecl(self, node) -> Any:
+        pass
+
+    def visit_VarDecl(self, node) -> Any:
+        pass
+
+    def visit_ClassDecl(self, node) -> Any:
+        pass
+
+    def visit_UnionDecl(self, node) -> Any:
+        pass
+
+    def visit_ExternDecl(self, node) -> Any:
+        pass
+
+    def visit_Block(self, node) -> Any:
+        pass
+
+    def visit_ExpressionStmt(self, node) -> Any:
+        pass
+
+    def visit_IfStmt(self, node) -> Any:
+        pass
+
+    def visit_WhileStmt(self, node) -> Any:
+        pass
+
+    def visit_ForStmt(self, node) -> Any:
+        pass
+
+    def visit_SwitchStmt(self, node) -> Any:
+        pass
+
+    def visit_CaseStmt(self, node) -> Any:
+        pass
+
+    def visit_ReturnStmt(self, node) -> Any:
+        pass
+
+    def visit_TryCatchStmt(self, node) -> Any:
+        pass
+
+    def visit_ThrowStmt(self, node) -> Any:
+        pass
+
+    def visit_GotoStmt(self, node) -> Any:
+        pass
+
+    def visit_LabelStmt(self, node) -> Any:
+        pass
+
+    def visit_LockStmt(self, node) -> Any:
+        pass
+
+    def visit_BinaryOp(self, node) -> Any:
+        pass
+
+    def visit_UnaryOp(self, node) -> Any:
+        pass
+
+    def visit_CallExpr(self, node) -> Any:
+        pass
+
+    def visit_MethodCall(self, node) -> Any:
+        pass
+
+    def visit_MemberAccess(self, node) -> Any:
+        pass
+
+    def visit_ArrayAccess(self, node) -> Any:
+        pass
+
+    def visit_PointerDeref(self, node) -> Any:
+        pass
+
+    def visit_AddressOf(self, node) -> Any:
+        pass
+
+    def visit_Literal(self, node) -> Any:
+        pass
+
+    def visit_Identifier(self, node) -> Any:
+        pass
+
+    def visit_ThisExpr(self, node) -> Any:
+        pass
+
+    def visit_SizeofExpr(self, node) -> Any:
+        pass
+
+    def visit_OffsetExpr(self, node) -> Any:
+        pass

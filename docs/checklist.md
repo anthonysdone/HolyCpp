@@ -33,7 +33,7 @@
   - Add helper functions: `is_integer()`, `is_float()`, `is_pointer()`, `is_void()`
   - Map HolyC type names to Type instances
 
-- [ ] **Task 1.2**: Create `tests/test_types.py` (<100 LoC)
+- [x] **Task 1.2**: Create `tests/test_types.py` (<100 LoC)
   - Test primitive type creation and properties
   - Test pointer type creation (single and multi-level)
   - Test array type creation and dimension handling
@@ -44,7 +44,7 @@
 
 ### 2. AST Node Definitions (`ast_nodes.py`) - ~400 LoC
 
-- [ ] **Task 2.1**: Implement `holyc_transpiler/ast_nodes.py` (~400 LoC)
+- [x] **Task 2.1**: Implement `holyc_transpiler/ast_nodes.py` (~400 LoC)
   - Define `ASTNode` base class with source location tracking
   - **Declaration nodes:**
     - `Program` (list of declarations)
@@ -85,7 +85,7 @@
   - Add `__repr__` methods for debugging
   - Add visitor pattern support (optional but recommended)
 
-- [ ] **Task 2.2**: Create `tests/unit/test_ast_nodes.py` (<100 LoC)
+- [x] **Task 2.2**: Create `tests/unit/test_ast_nodes.py` (<100 LoC)
   - Test AST node creation
   - Test node property access
   - Test source location tracking
@@ -99,7 +99,7 @@
 
 ### 3. Lexical Analysis (`lexer.py`) - ~600 LoC
 
-- [ ] **Task 3.1**: Implement `holyc_transpiler/lexer.py` (~600 LoC)
+- [x] **Task 3.1**: Implement `holyc_transpiler/lexer.py` (~600 LoC)
   - Define `TokenType` enum (all HolyC tokens)
   - Define `Token` class (type, value, line, column)
   - Implement `Lexer` class:
@@ -142,7 +142,7 @@
   - Test error cases (unterminated strings, invalid chars)
   - Test complete tokenization of sample programs
 
----
+---d
 
 ## Phase 3: Parser
 

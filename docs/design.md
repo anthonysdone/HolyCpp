@@ -75,6 +75,20 @@ typedef union {
 } holyc_i64_t;
 ```
 
+### 3.3 Literal Details
+
+**Multi-char Literal Packing:**
+- Up to 8 characters packed into uint64_t
+- Little-endian byte order
+- Example: 'ABC' → 0x434241 (C=0x43, B=0x42, A=0x41)
+- Excess characters beyond 8 are truncated
+
+**Escape Sequences:**
+Standard C escape sequences supported:
+- `\n` (newline), `\t` (tab), `\r` (carriage return)
+- `\\` (backslash), `\"` (quote), `\'` (apostrophe)
+- `\0` (null)
+
 ## 4. Key Language Features
 
 ### 4.1 Function Calls Without Parentheses
