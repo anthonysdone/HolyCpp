@@ -24,7 +24,7 @@ HolyC Source → Lexer → Parser → AST → Semantic Analyzer → Code Generat
 
 ### 2.2 Component Structure
 ```
-holyc_transpiler/
+src/
 ├── lexer.py          # Tokenization
 ├── parser.py         # Syntax analysis and AST construction
 ├── ast_nodes.py      # AST node definitions

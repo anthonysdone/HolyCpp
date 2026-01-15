@@ -225,7 +225,7 @@ class Lexer:
                 self.advance()
                 break
 
-                self.advance()
+            self.advance()
 
 
     def read_number(self) -> Token:
@@ -240,267 +240,269 @@ class Lexer:
             num_str += self.advance()
             num_str += self.advance()
 
-            while self.peek: 
-                char = self.peek()
-
-                if is_hex: 
-                    if char in "0123456789abcdefABCDEF": 
-                        num_str += self.advance()
-                    else:
-                        break
-                else:
-                    if char.isdigit():
-                        num_str += self.advance()
-                    elif char == "." and not is_float:
-                        is_float = True
-                        num_str += self.advance()
-                    elif char in "eE" and not is_float:
-                        is_float = True
-                        num_str += self.advance()
-                        if self.peek() in "+-":
-                            num_str += self.advance()
-                    else:
-                        break
-            
-            try: 
-                if is_hex: 
-                    value = int(num_str, 16)
-                    token_type = TokenType.INTEGER
-                elif is_float:
-                    value = float(num_str)
-                    token_type = TokenType.FLOAT
-                else:
-                    value = int(num_str)
-                    token_type = TokenType.INTEGER
-            except ValueError:
-                self.error(f"Invalid number literal: {num_str}")
-            
-        def read_string(self) -> Token: 
-            start_line = self.line
-            start_column = self.column
-
-            self.advance()
-
-            result = ""
-            while True: 
-                char = self.peek()
-                
-                if char is None:
-                    self.error("Unterminated string literal")
-                
-                if char == '"': 
-                    self.advance()
-                    break
-                
-                if char == "\\":
-                    self.advance
-                    next_char = self.peek()
-
-                    if next_char is None: 
-                        self.error("Unterminated string escape sequence")
-
-                    escape_map = {
-                        'n': '\n',
-                        't': '\t',
-                        'r': '\r',
-                        '\\': '\\',
-                        '"': '"',
-                        "'": "'",
-                        '0': '\0',
-                    }
-
-                    if next_char in escape_map: 
-                        result += escape_map[next_char]
-                        self.advance()
-                    else: 
-                        result += next_char
-                        self.advance()
-                else:
-                    result += char
-                    self.advance()
-            
-            return Token(TokenType.STRING, result, start_line, start_column)
-        
-        def read_char(self) -> Token: 
-            start_line = self.line
-            start_column = self.column
-
-            self.advance()
-
-            chars = []
-            while True: 
-                char = self.peek()
-
-                if char is None: 
-                    self.error("Unterminated char literal")
-                
-                if char == "'":
-                    self.advance()
-                    break
-
-                if char == "\\":
-                    self.advance()
-                    next_char = self.peek()
-
-                    if next_char is None:
-                        self.error("Unterminated char escape sequence")
-
-                    escape_map = {
-                        'n': '\n',
-                        't': '\t',
-                        'r': '\r',
-                        '\\': '\\',
-                        '"': '"',
-                        "'": "'",
-                        '0': '\0',
-                    }
-
-                    if next_char in escape_map:
-                        chars.append(escape_map[next_char])
-                        self.advance()
-                    else:
-                        chars.append(next_char)
-                        self.advance()
-                else: 
-                    chars.append(char)
-                    self.advance()
-
-            value = 0
-            for i, c in enumerate(chars):
-                if i >= 8: 
-                    break
-                value |= (ord(c) & 0xFF) << (i * 8)
-
-            return Token(TokenType.CHAR, value, start_line, start_column)
-        
-        def read_identifier(self) -> Token: 
-            start_line = self.line
-            start_column = self.column
-
-            result = ""
-            while self.peek() and (self.peek().isalnum() or self.peek() == "_"): 
-                result += self.advance()
-            
-            token_type = self.KEYWORDS.get(result, TokenType.IDENTIFIER)
-
-            return Token(token_type, result, start_line, start_column)
-        
-        def next_token(self) -> Token: 
-            while True: 
-                self.skip_whitespace()
-
-                if self.peek() == "/" and self.peek(1) == "/": 
-                    self.skip_line_comment()
-                elif self.peek() == "/" and self.peek(1) == "*":
-                    self.skip_block_comment()
-                else:
-                    break
-            
-            if self.pos >= self.length: 
-                return Token(TokenType.EOF, "", self.line, self.column)
-            
-            start_line = self.line
-            start_column = self.column
+        while self.peek(): 
             char = self.peek()
 
-            if char.isdigit():
-                return self.read_number()
+            if is_hex: 
+                if char in "0123456789abcdefABCDEF": 
+                    num_str += self.advance()
+                else:
+                    break
+            else:
+                if char.isdigit():
+                    num_str += self.advance()
+                elif char == "." and not is_float:
+                    is_float = True
+                    num_str += self.advance()
+                elif char in "eE":
+                    is_float = True
+                    num_str += self.advance()
+                    if self.peek() in "+-":
+                        num_str += self.advance()
+                else:
+                    break
+        
+        try: 
+            if is_hex: 
+                value = int(num_str, 16)
+                token_type = TokenType.INTEGER
+            elif is_float:
+                value = float(num_str)
+                token_type = TokenType.FLOAT
+            else:
+                value = int(num_str)
+                token_type = TokenType.INTEGER
+        except ValueError:
+            self.error(f"Invalid number literal: {num_str}")
+        
+        return Token(token_type, value, start_line, start_column)
             
-            if char == '"':
-                return read_string()
+    def read_string(self) -> Token: 
+        start_line = self.line
+        start_column = self.column
+
+        self.advance()
+
+        result = ""
+        while True: 
+            char = self.peek()
+            
+            if char is None:
+                self.error("Unterminated string literal")
+            
+            if char == '"': 
+                self.advance()
+                break
+            
+            if char == "\\":
+                self.advance()
+                next_char = self.peek()
+
+                if next_char is None: 
+                    self.error("Unterminated string escape sequence")
+
+                escape_map = {
+                    'n': '\n',
+                    't': '\t',
+                    'r': '\r',
+                    '\\': '\\',
+                    '"': '"',
+                    "'": "'",
+                    '0': '\0',
+                }
+
+                if next_char in escape_map: 
+                    result += escape_map[next_char]
+                    self.advance()
+                else: 
+                    result += next_char
+                    self.advance()
+            else:
+                result += char
+                self.advance()
+        
+        return Token(TokenType.STRING, result, start_line, start_column)
+    
+    def read_char(self) -> Token: 
+        start_line = self.line
+        start_column = self.column
+
+        self.advance()
+
+        chars = []
+        while True: 
+            char = self.peek()
+
+            if char is None: 
+                self.error("Unterminated char literal")
             
             if char == "'":
-                return read_char()
+                self.advance()
+                break
+
+            if char == "\\":
+                self.advance()
+                next_char = self.peek()
+
+                if next_char is None:
+                    self.error("Unterminated char escape sequence")
+
+                escape_map = {
+                    'n': '\n',
+                    't': '\t',
+                    'r': '\r',
+                    '\\': '\\',
+                    '"': '"',
+                    "'": "'",
+                    '0': '\0',
+                }
+
+                if next_char in escape_map:
+                    chars.append(escape_map[next_char])
+                    self.advance()
+                else:
+                    chars.append(next_char)
+                    self.advance()
+            else: 
+                chars.append(char)
+                self.advance()
+
+        value = 0
+        for i, c in enumerate(chars):
+            if i >= 8: 
+                break
+            value |= (ord(c) & 0xFF) << (i * 8)
+
+        return Token(TokenType.CHAR, value, start_line, start_column)
+    
+    def read_identifier(self) -> Token: 
+        start_line = self.line
+        start_column = self.column
+
+        result = ""
+        while self.peek() and (self.peek().isalnum() or self.peek() == "_"): 
+            result += self.advance()
         
-            if char.isalpha() or char == "_":
-                return read_identifier()
+        token_type = self.KEYWORDS.get(result, TokenType.IDENTIFIER)
 
+        return Token(token_type, result, start_line, start_column)
+    
+    def next_token(self) -> Token: 
+        while True: 
+            self.skip_whitespace()
+
+            if self.peek() == "/" and self.peek(1) == "/": 
+                self.skip_line_comment()
+            elif self.peek() == "/" and self.peek(1) == "*":
+                self.skip_block_comment()
+            else:
+                break
+        
+        if self.pos >= self.length: 
+            return Token(TokenType.EOF, "", self.line, self.column)
+        
+        start_line = self.line
+        start_column = self.column
+        char = self.peek()
+
+        if char.isdigit():
+            return self.read_number()
+        
+        if char == '"':
+            return self.read_string()
+        
+        if char == "'":
+            return self.read_char()
+    
+        if char.isalpha() or char == "_":
+            return self.read_identifier()
+
+        self.advance()
+
+        if char == '.' and self.peek() == '.' and self.peek(1) == '.':
             self.advance()
+            self.advance()
+            return Token(TokenType.ELLIPSIS, '...', start_line, start_column)
+        
+        if char == '<' and self.peek() == '<' and self.peek(1) == '=':
+            self.advance()
+            self.advance()
+            return Token(TokenType.LEFT_SHIFT_EQUAL, '<<=', start_line, start_column)
+        
+        if char == '>' and self.peek() == '>' and self.peek(1) == '=':
+            self.advance()
+            self.advance()
+            return Token(TokenType.RIGHT_SHIFT_EQUAL, '>>=', start_line, start_column)
+        
+        two_char_ops = {
+            '++': TokenType.PLUS_PLUS,
+            '--': TokenType.MINUS_MINUS,
+            '<<': TokenType.LEFT_SHIFT,
+            '>>': TokenType.RIGHT_SHIFT,
+            '<=': TokenType.LESS_EQUAL,
+            '>=': TokenType.GREATER_EQUAL,
+            '==': TokenType.EQUAL_EQUAL,
+            '!=': TokenType.BANG_EQUAL,
+            '&&': TokenType.AMP_AMP,
+            '||': TokenType.PIPE_PIPE,
+            '^^': TokenType.CARET_CARET,
+            '+=': TokenType.PLUS_EQUAL,
+            '-=': TokenType.MINUS_EQUAL,
+            '*=': TokenType.STAR_EQUAL,
+            '/=': TokenType.SLASH_EQUAL,
+            '%=': TokenType.PERCENT_EQUAL,
+            '&=': TokenType.AMP_EQUAL,
+            '|=': TokenType.PIPE_EQUAL,
+            '^=': TokenType.CARET_EQUAL,
+            '->': TokenType.ARROW,
+        }
 
-            if char == '.' and self.peek() == '.' and self.peek(1) == '.':
-                self.advance()
-                self.advance()
-                return Token(TokenType.ELLIPSIS, '...', start_line, start_column)
-            
-            if char == '<' and self.peek() == '<' and self.peek(1) == '=':
-                self.advance()
-                self.advance()
-                return Token(TokenType.LEFT_SHIFT_EQUAL, '<<=', start_line, start_column)
-            
-            if char == '>' and self.peek() == '>' and self.peek(1) == '=':
-                self.advance()
-                self.advance()
-                return Token(TokenType.RIGHT_SHIFT_EQUAL, '>>=', start_line, start_column)
-            
-            two_char_ops = {
-                '++': TokenType.PLUS_PLUS,
-                '--': TokenType.MINUS_MINUS,
-                '<<': TokenType.LEFT_SHIFT,
-                '>>': TokenType.RIGHT_SHIFT,
-                '<=': TokenType.LESS_EQUAL,
-                '>=': TokenType.GREATER_EQUAL,
-                '==': TokenType.EQUAL_EQUAL,
-                '!=': TokenType.BANG_EQUAL,
-                '&&': TokenType.AMP_AMP,
-                '||': TokenType.PIPE_PIPE,
-                '^^': TokenType.CARET_CARET,
-                '+=': TokenType.PLUS_EQUAL,
-                '-=': TokenType.MINUS_EQUAL,
-                '*=': TokenType.STAR_EQUAL,
-                '/=': TokenType.SLASH_EQUAL,
-                '%=': TokenType.PERCENT_EQUAL,
-                '&=': TokenType.AMP_EQUAL,
-                '|=': TokenType.PIPE_EQUAL,
-                '^=': TokenType.CARET_EQUAL,
-                '->': TokenType.ARROW,
-            }
+        two_char = char + (self.peek() or "")
+        if two_char in two_char_ops:
+            self.advance()
+            return Token(two_char_ops[two_char], two_char, start_line, start_column)
+        
+        single_char_tokens = {
+            '+': TokenType.PLUS,
+            '-': TokenType.MINUS,
+            '*': TokenType.STAR,
+            '/': TokenType.SLASH,
+            '%': TokenType.PERCENT,
+            '&': TokenType.AMPERSAND,
+            '|': TokenType.PIPE,
+            '^': TokenType.CARET,
+            '~': TokenType.TILDE,
+            '!': TokenType.BANG,
+            '<': TokenType.LESS,
+            '>': TokenType.GREATER,
+            '=': TokenType.EQUAL,
+            '`': TokenType.BACKTICK,
+            '(': TokenType.LPAREN,
+            ')': TokenType.RPAREN,
+            '{': TokenType.LBRACE,
+            '}': TokenType.RBRACE,
+            '[': TokenType.LBRACKET,
+            ']': TokenType.RBRACKET,
+            ';': TokenType.SEMICOLON,
+            ',': TokenType.COMMA,
+            '.': TokenType.DOT,
+            ':': TokenType.COLON,
+            '?': TokenType.QUESTION,
+        }
 
-            two_char = char + (self.peek() or "")
-            if two_char in two_char_ops:
-                self.advance()
-                return Token(two_char_ops[two_char], two_char, start_line, start_column)
-            
-            single_char_tokens = {
-                '+': TokenType.PLUS,
-                '-': TokenType.MINUS,
-                '*': TokenType.STAR,
-                '/': TokenType.SLASH,
-                '%': TokenType.PERCENT,
-                '&': TokenType.AMPERSAND,
-                '|': TokenType.PIPE,
-                '^': TokenType.CARET,
-                '~': TokenType.TILDE,
-                '!': TokenType.BANG,
-                '<': TokenType.LESS,
-                '>': TokenType.GREATER,
-                '=': TokenType.EQUAL,
-                '`': TokenType.BACKTICK,
-                '(': TokenType.LPAREN,
-                ')': TokenType.RPAREN,
-                '{': TokenType.LBRACE,
-                '}': TokenType.RBRACE,
-                '[': TokenType.LBRACKET,
-                ']': TokenType.RBRACKET,
-                ';': TokenType.SEMICOLON,
-                ',': TokenType.COMMA,
-                '.': TokenType.DOT,
-                ':': TokenType.COLON,
-                '?': TokenType.QUESTION,
-            }
+        if char in single_char_tokens: 
+            return Token(single_char_tokens[char], char, start_line, start_column)
+        
+        self.error(f"Unknown character: {char!r}")
 
-            if char in single_char_tokens: 
-                return Token(single_char_tokens[char], char, start_line, start_column)
-            
-            self.error(f"Unknown character: {char!r}")
+    def tokenize(self) -> List[Token]: 
+        tokens = []
 
-        def tokenize(self) -> List[Token]: 
-            tokens = []
+        while True: 
+            token = self.next_token()
+            tokens.append(token)
 
-            while True: 
-                token = self.next_token()
-                tokens.append(token)
+            if token.type == TokenType.EOF:
+                break
 
-                if token.type == TokenType.EOF:
-                    break
-
-            return tokens
+        return tokens

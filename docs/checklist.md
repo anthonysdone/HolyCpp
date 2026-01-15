@@ -130,7 +130,7 @@
   - Pack multi-char literals into uint64_t
   - Proper error reporting with line/column
 
-- [ ] **Task 3.2**: Create `tests/unit/test_lexer.py` (<100 LoC)
+- [x] **Task 3.2**: Create `tests/unit/test_lexer.py` (<100 LoC)
   - Test single tokens (operators, punctuation)
   - Test keywords vs identifiers
   - Test number literals (decimal, hex, float)
@@ -142,7 +142,7 @@
   - Test error cases (unterminated strings, invalid chars)
   - Test complete tokenization of sample programs
 
----d
+---
 
 ## Phase 3: Parser
 
@@ -223,7 +223,7 @@
   - Handle variable attributes: `static`, `reg`, `noreg`
   - Collect top-level statements (not in functions) for `_holyc_init()`
 
-- [ ] **Task 4.5**: Create `tests/unit/test_parser.py` (<300 LoC)
+- [ ] **Task 4.5**: Create `tests/unit/test_parser.py` (<200 LoC)
   - **Expression tests:**
     - Test operator precedence
     - Test chained comparisons
