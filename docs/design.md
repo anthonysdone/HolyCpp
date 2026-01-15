@@ -13,8 +13,7 @@
 - Perfect compile-time execution (#exe{}) - will translate to runtime where possible
 - Full TempleOS system calls - will provide stubs/wrappers
 - Binary compatibility with TempleOS
-- Inline assembly support (initially - can be added in later phases)
-
+- Inline assembly support 
 ## 2. Architecture
 
 ### 2.1 Pipeline Overview
@@ -751,7 +750,7 @@ double len = CVector_Length(v);
 **Implementation Notes:**
 - Track method-to-function mapping in symbol table
 - Generate function names as `ClassName_MethodName`
-- Transform `obj->Method(args)` to `ClassName_Method(obj, args)`
+- Transform `obj->Method(args)` or `obj.Method(args)` to `ClassName_Method(obj, args)`
 - `this` keyword becomes first parameter
 
 ### 4.25 Class Inheritance
@@ -1168,7 +1167,7 @@ class ThisExpr(Expression):
 ### Phase 5: Object System (Week 7)
 - [ ] Classes (structs)
 - [ ] Class methods
-- [ ] Method invocation (obj->Method())
+- [ ] Method invocation (obj->Method() or obj.Method())
 - [ ] this keyword
 - [ ] Single inheritance
 - [ ] Unions
@@ -1434,21 +1433,21 @@ _extern sqrt F64 Sqrt(F64 x);
 _extern sin F64 Sin(F64 x);
 _extern cos F64 Cos(F64 x);
 
-class CVec3 {
+class Vec3 {
     F64 x, y, z;
 };
 
-U0 CVec3->Init(F64 _x, F64 _y, F64 _z) {
+U0 Vec3->Init(F64 _x, F64 _y, F64 _z) {
     this->x = _x;
     this->y = _y;
     this->z = _z;
 }
 
-F64 CVec3->Length() {
+F64 Vec3->Length() {
     return Sqrt(this->x * this->x + this->y * this->y + this->z * this->z);
 }
 
-U0 CVec3->Normalize() {
+U0 Vec3->Normalize() {
     F64 len = this->Length();
     if (len > 0.0) {
         this->x /= len;
@@ -1457,8 +1456,8 @@ U0 CVec3->Normalize() {
     }
 }
 
-CVec3* CVec3->Cross(CVec3 *other) {
-    CVec3 *result = MAlloc(sizeof(CVec3));
+Vec3* Vec3->Cross(Vec3 *other) {
+    Vec3 *result = MAlloc(sizeof(Vec3));
     result->x = this->y * other->z - this->z * other->y;
     result->y = this->z * other->x - this->x * other->z;
     result->z = this->x * other->y - this->y * other->x;
@@ -1466,29 +1465,29 @@ CVec3* CVec3->Cross(CVec3 *other) {
 }
 
 // Usage
-CVec3 *v1 = MAlloc(sizeof(CVec3));
-CVec3 *v2 = MAlloc(sizeof(CVec3));
+Vec3 *v1 = MAlloc(sizeof(Vec3));
+Vec3 *v2 = MAlloc(sizeof(Vec3));
 v1->Init(1.0, 0.0, 0.0);
 v2->Init(0.0, 1.0, 0.0);
-CVec3 *v3 = v1->Cross(v2);
+Vec3 *v3 = v1->Cross(v2);
 "Cross product: (%f, %f, %f)\n", v3->x, v3->y, v3->z;
 ```
 
 #### 10.3.2 Callback-Based Event System
 ```holyc
-class CEvent {
+class Event {
     U8 *name;
     I64 data;
 };
 
-U0 (*event_handler)(CEvent *evt);
+U0 (*event_handler)(Event *evt);
 
-U0 RegisterHandler(U0 (*handler)(CEvent *)) {
+U0 RegisterHandler(U0 (*handler)(Event *)) {
     event_handler = handler;
 }
 
 U0 TriggerEvent(U8 *name, I64 data) {
-    CEvent *evt = MAlloc(sizeof(CEvent));
+    Event *evt = MAlloc(sizeof(Event));
     evt->name = name;
     evt->data = data;
     if (event_handler)
@@ -1496,7 +1495,7 @@ U0 TriggerEvent(U8 *name, I64 data) {
     Free(evt);
 }
 
-U0 MyHandler(CEvent *evt) {
+U0 MyHandler(Event *evt) {
     "Event: %s, Data: %d\n", evt->name, evt->data;
 }
 
@@ -1513,30 +1512,30 @@ _extern device_write U0 DeviceWrite(I64 handle, U8 *data, I64 size);
 _extern device_read I64 DeviceRead(I64 handle, U8 *buffer, I64 size);
 _extern device_close U0 DeviceClose(I64 handle);
 
-class CDevice {
+class Device {
     I64 handle;
     U8 *name;
     I64 is_open;
 };
 
-U0 CDevice->Open(U8 *device_name) {
+U0 Device->Open(U8 *device_name) {
     this->name = device_name;
     this->handle = DeviceInit(device_name);
     this->is_open = (this->handle >= 0);
 }
 
-U0 CDevice->Write(U8 *data, I64 size) {
+U0 Device->Write(U8 *data, I64 size) {
     if (this->is_open)
         DeviceWrite(this->handle, data, size);
 }
 
-I64 CDevice->Read(U8 *buffer, I64 size) {
+I64 Device->Read(U8 *buffer, I64 size) {
     if (this->is_open)
         return DeviceRead(this->handle, buffer, size);
     return -1;
 }
 
-U0 CDevice->Close() {
+U0 Device->Close() {
     if (this->is_open) {
         DeviceClose(this->handle);
         this->is_open = 0;
@@ -1544,7 +1543,7 @@ U0 CDevice->Close() {
 }
 
 // Usage
-CDevice *dev = MAlloc(sizeof(CDevice));
+Device *dev = MAlloc(sizeof(CDevice));
 dev->Open("/dev/mydevice");
 U8 buffer[256];
 I64 bytes = dev->Read(buffer, 256);
@@ -1553,21 +1552,21 @@ dev->Close();
 
 #### 10.3.4 Memory Pool Allocator
 ```holyc
-class CMemPool {
+class MemPool {
     U8 *pool;
     I64 size;
     I64 used;
     I64 *free_list;
 };
 
-U0 CMemPool->Init(I64 pool_size) {
+U0 MemPool->Init(I64 pool_size) {
     this->size = pool_size;
     this->pool = MAlloc(pool_size);
     this->used = 0;
     this->free_list = NULL;
 }
 
-U8* CMemPool->Alloc(I64 size) {
+U8* MemPool->Alloc(I64 size) {
     if (this->used + size > this->size)
         return NULL;
     U8 *ptr = this->pool + this->used;
@@ -1575,30 +1574,30 @@ U8* CMemPool->Alloc(I64 size) {
     return ptr;
 }
 
-U0 CMemPool->Reset() {
+U0 MemPool->Reset() {
     this->used = 0;
 }
 
-U0 CMemPool->Destroy() {
+U0 MemPool->Destroy() {
     Free(this->pool);
 }
 ```
 
 #### 10.3.5 Array Container with Dynamic Growth
 ```holyc
-class CArray {
+class Array {
     I64 *data;
     I64 size;
     I64 capacity;
 };
 
-U0 CArray->Init(I64 initial_capacity) {
+U0 Array->Init(I64 initial_capacity) {
     this->capacity = initial_capacity;
     this->size = 0;
     this->data = MAlloc(initial_capacity * sizeof(I64));
 }
 
-U0 CArray->Push(I64 value) {
+U0 Array->Push(I64 value) {
     if (this->size >= this->capacity) {
         // Grow array
         this->capacity *= 2;
@@ -1613,13 +1612,13 @@ U0 CArray->Push(I64 value) {
     this->size++;
 }
 
-I64 CArray->Get(I64 index) {
+I64 Array->Get(I64 index) {
     if (index >= 0 && index < this->size)
         return this->data[index];
     return 0;
 }
 
-U0 CArray->Destroy() {
+U0 Array->Destroy() {
     Free(this->data);
 }
 ```

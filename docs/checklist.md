@@ -148,7 +148,7 @@
 
 ### 4. Syntax Analysis (`parser.py`) - ~1800 LoC
 
-- [ ] **Task 4.1**: Implement `holyc_transpiler/parser.py` - Part 1 (Core Parser) (~200 LoC)
+- [x] **Task 4.1**: Implement `holyc_transpiler/parser.py` - Part 1 (Core Parser) (~200 LoC)
   - Define `Parser` class:
     - Initialize with token list
     - Track current position
@@ -164,7 +164,7 @@
     - `is_declaration_start()` - check if starting a declaration
     - `synchronize()` - error recovery
 
-- [ ] **Task 4.2**: Implement `holyc_transpiler/parser.py` - Part 2 (Expressions) (~600 LoC)
+- [x] **Task 4.2**: Implement `holyc_transpiler/parser.py` - Part 2 (Expressions) (~600 LoC)
   - Implement expression parsing with precedence climbing:
     - `parse_expression()` - entry point
     - `parse_assignment()` - assignment operators
